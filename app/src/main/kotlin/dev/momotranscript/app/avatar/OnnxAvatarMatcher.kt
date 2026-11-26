@@ -90,7 +90,11 @@ class OnnxAvatarMatcher(
 
     init {
         val avatarDir = File(bundleRoot, "avatar")
-        val unifiedModelFile = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL)
+        val unifiedModelFile = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+            bundleRoot,
+            dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL,
+            dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_LEGACY,
+        )
         val unifiedEmbFile = File(avatarDir, "stage1_embeddings_pe256.npz")
         val useUnified = unifiedModelFile.isFile && unifiedModelFile.length() > 0L &&
             unifiedEmbFile.isFile && unifiedEmbFile.length() > 0L
@@ -759,7 +763,11 @@ class OnnxAvatarMatcher(
         private const val TOP_K_SKINS = 5
 
         fun isCfid6Available(bundleRoot: File): Boolean {
-            val unifiedMnn = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL)
+            val unifiedMnn = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+                bundleRoot,
+                dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL,
+                dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_LEGACY,
+            )
             val npzPe = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.STAGE1_PE256)
             val cf6Cat = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.CFID6_CATALOG)
             val cf6Emb = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.CFID6_STAGE1_PE256)
@@ -768,7 +776,11 @@ class OnnxAvatarMatcher(
         }
 
         fun isAvailable(bundleRoot: File): Boolean {
-            val unifiedMnn = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL)
+            val unifiedMnn = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+                bundleRoot,
+                dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL,
+                dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_LEGACY,
+            )
             val npzPe = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.STAGE1_PE256)
             val legacyMnn = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
                 bundleRoot,

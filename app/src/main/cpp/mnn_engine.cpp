@@ -407,10 +407,13 @@ bool MnnCcipSession::load(
         impl_->use_gpu_cache = true;
     }
 
-    const bool is_unified_model = (model_path.find("animeface_unified") != std::string::npos);
-    // PE-Core-S/16 blocks.0 Q@K^T peaks at ~87,700 (> FP16 max 65,504) before *scale, overflowing
-    // BOTH OpenCL(FP16) and ARMv8.2-FP16 CPU into NaN on bright portraits. Always use FP32 (Precision_Normal).
-    const auto active_prec = is_unified_model
+    // Legacy v2 PE-Core-S/16 weights (`animeface_unified_v2_w4.mnn`) had blocks.0 head 2 Q@K^T
+    // peaking at ~112,929 (> FP16 max 65,504), so keep them on FP32 (Precision_Normal).
+    // Calibrated `fp16safe` weights stay <= 4,500 across the entire graph and run cleanly in FP16!
+    const bool is_legacy_unified =
+        (model_path.find("animeface_unified") != std::string::npos) &&
+        (model_path.find("fp16safe") == std::string::npos);
+    const auto active_prec = is_legacy_unified
         ? MNN::BackendConfig::Precision_Normal
         : MNN::BackendConfig::Precision_Low;
 
