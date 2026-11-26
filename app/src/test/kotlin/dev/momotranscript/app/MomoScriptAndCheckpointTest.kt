@@ -1,5 +1,7 @@
 package dev.momotranscript.app
 
+import dev.momotranscript.app.ui.INLINE_TOKEN_REGEX
+import dev.momotranscript.app.ui.LEFT_SPEAKER_REGEX
 import dev.momotranscript.app.ui.parseMomoScriptPages
 import dev.momotranscript.app.ui.replaceMomoScriptPage
 import dev.momotranscript.app.work.CheckpointBranchInput
@@ -102,5 +104,24 @@ class MomoScriptAndCheckpointTest {
 
         CheckpointStore.markCompleted(jobDir)
         assertNull(CheckpointStore.findLatestResumable(jobsRoot))
+    }
+
+    @Test
+    fun syntaxHighlightRegexDoesNotTreatImageColonAsSpeakerName() {
+        // Continuation line with `[image: ...]` must NOT match as a speaker name!
+        assertNull(LEFT_SPEAKER_REGEX.matchEntire("> [image: 得意/半睁眼/微笑]"))
+        val token = INLINE_TOKEN_REGEX.find("> [image: 得意/半睁眼/微笑]")?.value
+        assertEquals("[image: 得意/半睁眼/微笑]", token)
+
+        // Real speaker + `[image: ...]` must split cleanly
+        val mSpeaker = LEFT_SPEAKER_REGEX.matchEntire("> 葛叶: [image: 闭眼/张嘴/微笑]")
+        assertNotNull(mSpeaker)
+        assertEquals("葛叶", mSpeaker!!.groupValues[1])
+        assertEquals("[image: 闭眼/张嘴/微笑]", mSpeaker.groupValues[3])
+
+        // `[unknown speaker]: ...` must still match as speaker
+        val mUnknown = LEFT_SPEAKER_REGEX.matchEntire("> [unknown speaker]: 你好")
+        assertNotNull(mUnknown)
+        assertEquals("[unknown speaker]", mUnknown!!.groupValues[1])
     }
 }

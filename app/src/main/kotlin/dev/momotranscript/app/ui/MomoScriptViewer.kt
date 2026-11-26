@@ -67,8 +67,8 @@ data class MomoScriptPage(
 )
 
 private val PAGE_HEADER_REGEX = Regex("^===\\s+(.+?)\\s+===$")
-private val LEFT_SPEAKER_REGEX = Regex("^>\\s+([^:\\n]{1,48}):(\\s?)(.*)$")
-private val INLINE_TOKEN_REGEX = Regex("\\[(image(?:: [^\\]]+)?|unreadable|unknown speaker)\\]")
+internal val LEFT_SPEAKER_REGEX = Regex("^>\\s+((?:\\[unknown speaker\\]|[^:\\[\\n]{1,48})):(\\s?)(.*)$")
+internal val INLINE_TOKEN_REGEX = Regex("\\[(image(?:: [^\\]]+)?|unreadable|unknown speaker)\\]")
 
 /**
  * Splits a combined MomoScript document into pages delimited by `=== Title ===` lines.
