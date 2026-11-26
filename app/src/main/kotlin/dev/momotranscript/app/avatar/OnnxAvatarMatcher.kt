@@ -110,7 +110,11 @@ class OnnxAvatarMatcher(
         val galMs = (System.nanoTime() - tGal) / 1_000_000L
 
         val ccipReq = when (backendMode) {
-            OnnxTranscriptionEngine.BACKEND_AUTO_GPU_CPU, OnnxTranscriptionEngine.BACKEND_OPENCL_ALL ->
+            // PE-Core-S/16 ViT + W4-HQQ runs 3-4x faster on ARMv8.2-FP16 CPU and avoids Adreno OpenCL FP16
+            // LayerNorm overflow; legacy 384px CCIP still uses OpenCL in auto mode.
+            OnnxTranscriptionEngine.BACKEND_AUTO_GPU_CPU ->
+                if (useUnified) NativeCore.MNN_BACKEND_CPU_FP16 else NativeCore.MNN_BACKEND_OPENCL
+            OnnxTranscriptionEngine.BACKEND_OPENCL_ALL ->
                 NativeCore.MNN_BACKEND_OPENCL
             OnnxTranscriptionEngine.BACKEND_VULKAN_ALL ->
                 NativeCore.MNN_BACKEND_VULKAN
@@ -472,14 +476,14 @@ class OnnxAvatarMatcher(
 
         val eligibleBoxes = eligibleIndices.map { insertBoxes[it] }
         val (repLocalIndices, localToRep, repThumbs) = deduplicateByThumbnail(
-            rgbBytes, imgW, imgH, eligibleBoxes, circleMask = false, maeThreshold = 3.5f, shiftTolerant = true,
+            rgbBytes, imgW, imgH, eligibleBoxes, circleMask = false, maeThreshold = 0.8f, shiftTolerant = true,
         )
         val repEmbsArr = arrayOfNulls<FloatArray>(repLocalIndices.size)
         val repExprSummaries = Array(repLocalIndices.size) { "" }
         val missSlots = ArrayList<Int>()
         var cacheHits = 0
         for (slot in repLocalIndices.indices) {
-            val hit = lookupThumbCache(insertEmbCache, repThumbs[slot], 3.5f, shiftTolerant = true)
+            val hit = lookupThumbCache(insertEmbCache, repThumbs[slot], 0.8f, shiftTolerant = true)
             if (hit != null) {
                 repEmbsArr[slot] = hit.emb
                 repExprSummaries[slot] = hit.exprSummary

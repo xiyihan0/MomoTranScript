@@ -1497,8 +1497,8 @@ private fun TranscribeTab(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     val backendDesc = when (backendMode) {
-                        OnnxTranscriptionEngine.BACKEND_AUTO_GPU_CPU -> "det / CCIP 走 OpenCL GPU，动态宽 OCR 走 ARMv9 FP16 CPU"
-                        OnnxTranscriptionEngine.BACKEND_OPENCL_ALL -> "全部 4 模型走 OpenCL GPU（首次会编译并缓存 Shader）"
+                        OnnxTranscriptionEngine.BACKEND_AUTO_GPU_CPU -> "det 走 OpenCL GPU，OCR 与 PE-Core 视觉编码走 ARMv8.2-FP16 CPU"
+                        OnnxTranscriptionEngine.BACKEND_OPENCL_ALL -> "全部模型走 OpenCL GPU（首次会编译并缓存 Shader）"
                         OnnxTranscriptionEngine.BACKEND_VULKAN_ALL -> "全部 4 模型走 Vulkan Compute GPU（不支持时自动回退 CPU）"
                         else -> "全部 4 模型走 MNN ARMv9 FP16 CPU（4 线程基准模式）"
                     }

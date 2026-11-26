@@ -407,9 +407,16 @@ bool MnnCcipSession::load(
         impl_->use_gpu_cache = true;
     }
 
+    const bool is_unified_model = (model_path.find("animeface_unified") != std::string::npos);
+    // Unfused ViT LayerNorm + W4-HQQ overflows Adreno OpenCL FP16 (`Precision_Low`); use FP32 on GPU.
+    const auto gpu_prec = is_unified_model
+        ? MNN::BackendConfig::Precision_Normal
+        : MNN::BackendConfig::Precision_Low;
+    const auto active_prec = (ftype == MNN_FORWARD_CPU) ? MNN::BackendConfig::Precision_Low : gpu_prec;
+
     MNN::ScheduleConfig scfg;
     MNN::BackendConfig bcfg;
-    fill_schedule_config(scfg, bcfg, ftype, threads, MNN::BackendConfig::Precision_Low);
+    fill_schedule_config(scfg, bcfg, ftype, threads, active_prec);
 
     impl_->session = impl_->net->createSession(scfg);
     if (impl_->session == nullptr && ftype != MNN_FORWARD_CPU) {
@@ -470,8 +477,9 @@ bool MnnCcipSession::load(
         if (total > 0) expr_dim_ = total;
     }
 
+    const auto final_prec = (ftype == MNN_FORWARD_CPU) ? MNN::BackendConfig::Precision_Low : gpu_prec;
     active_backend_ = query_session_backend_label(
-        impl_->net, impl_->session, ftype, MNN::BackendConfig::Precision_Low);
+        impl_->net, impl_->session, ftype, final_prec);
     return true;
 }
 
