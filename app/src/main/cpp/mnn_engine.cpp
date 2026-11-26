@@ -408,11 +408,11 @@ bool MnnCcipSession::load(
     }
 
     const bool is_unified_model = (model_path.find("animeface_unified") != std::string::npos);
-    // Unfused ViT LayerNorm + W4-HQQ overflows Adreno OpenCL FP16 (`Precision_Low`); use FP32 on GPU.
-    const auto gpu_prec = is_unified_model
+    // PE-Core-S/16 blocks.0 Q@K^T peaks at ~87,700 (> FP16 max 65,504) before *scale, overflowing
+    // BOTH OpenCL(FP16) and ARMv8.2-FP16 CPU into NaN on bright portraits. Always use FP32 (Precision_Normal).
+    const auto active_prec = is_unified_model
         ? MNN::BackendConfig::Precision_Normal
         : MNN::BackendConfig::Precision_Low;
-    const auto active_prec = (ftype == MNN_FORWARD_CPU) ? MNN::BackendConfig::Precision_Low : gpu_prec;
 
     MNN::ScheduleConfig scfg;
     MNN::BackendConfig bcfg;
@@ -422,7 +422,7 @@ bool MnnCcipSession::load(
     if (impl_->session == nullptr && ftype != MNN_FORWARD_CPU) {
         ftype = MNN_FORWARD_CPU;
         impl_->use_gpu_cache = false;
-        fill_schedule_config(scfg, bcfg, ftype, threads, MNN::BackendConfig::Precision_Low);
+        fill_schedule_config(scfg, bcfg, ftype, threads, active_prec);
         impl_->session = impl_->net->createSession(scfg);
     }
     if (impl_->session == nullptr) {
@@ -477,9 +477,8 @@ bool MnnCcipSession::load(
         if (total > 0) expr_dim_ = total;
     }
 
-    const auto final_prec = (ftype == MNN_FORWARD_CPU) ? MNN::BackendConfig::Precision_Low : gpu_prec;
     active_backend_ = query_session_backend_label(
-        impl_->net, impl_->session, ftype, final_prec);
+        impl_->net, impl_->session, ftype, active_prec);
     return true;
 }
 
