@@ -390,17 +390,23 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
             coreVersion = "${NativeCore.coreVersion()}\n$mnnInfo"
         }
     }
-    val avifsPackFile = remember { File(bundleRoot, "avatar/stage2_templates.avifs.pack") }
+    fun resolveAvifsPack(): File = ModelPackCatalog.resolveFile(
+        bundleRoot,
+        ModelPackCatalog.STAGE2_PACK,
+        ModelPackCatalog.STAGE2_LEGACY,
+    )
     var packInspectNote by remember {
+        val f = resolveAvifsPack()
         mutableStateOf(
-            if (avifsPackFile.isFile) NativeCore.inspectAvifsPack(avifsPackFile.absolutePath) else "",
+            if (f.isFile) NativeCore.inspectAvifsPack(f.absolutePath) else "",
         )
     }
 
     fun refreshPacks() {
         packStatuses = ModelPackCatalog.inspectInstalled(bundleRoot)
-        packInspectNote = if (avifsPackFile.isFile) {
-            NativeCore.inspectAvifsPack(avifsPackFile.absolutePath)
+        val f = resolveAvifsPack()
+        packInspectNote = if (f.isFile) {
+            NativeCore.inspectAvifsPack(f.absolutePath)
         } else {
             ""
         }

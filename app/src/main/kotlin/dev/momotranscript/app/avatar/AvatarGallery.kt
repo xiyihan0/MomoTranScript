@@ -197,8 +197,13 @@ class AvatarGallery(avatarDir: File) : Closeable {
         officialCanons = official
         packV2ToMoetalkExpr = p2Map
 
-        // Open optional MMTAVIF1 Stage-2 container
-        val packFile = File(avatarDir, "stage2_templates.avifs.pack")
+        // Open optional MMTAVIF1 Stage-2 container (prefer slim q80 pack, fall back to legacy q92)
+        val packQ80 = File(avatarDir, "stage2_templates_q80.avifs.pack")
+        val packFile = if (packQ80.isFile && packQ80.length() > 0L) {
+            packQ80
+        } else {
+            File(avatarDir, "stage2_templates.avifs.pack")
+        }
         if (packFile.isFile) {
             val raf = RandomAccessFile(packFile, "r")
             val magic = ByteArray(8)

@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/xiyihan0/MomoTranScript/releases">GitHub Releases 下载</a> ·
-  <a href="https://modelscope.cn/models/xiyihan/momotranscript-models/resolve/master/releases/MomoTranScript-0.5.3-arm64-release.apk">国内高速镜像（ModelScope）</a> ·
+  <a href="https://modelscope.cn/models/xiyihan/momotranscript-models/resolve/master/releases/MomoTranScript-0.5.4-arm64-release.apk">国内高速镜像（ModelScope）</a> ·
   <a href="https://www.xiyihan.cn/momotranscript/">应用主页</a> ·
   <a href="https://www.xiyihan.cn/momotranscript/privacy.html">隐私政策</a>
 </p>
@@ -26,7 +26,7 @@
 - **MNN 3.6.2 跨厂商 GPU + ARMv9 FP16 异构加速**：
   - 支持 **自动（OpenCL GPU + ARMv8.2-FP16 CPU）/ OpenCL / Vulkan / CPU** 四档运行时切换与 GPU Shader 磁盘缓存；
   - 对检测模型（23 层）与视觉特征模型（76 层）做了原生 `LayerNormalization` 图融合，彻底消除移动端 FP16 溢出；
-  - 实测参考（`vivo V2302A` 天玑 9200+，`345×16384` 超长图 / 25 窗 / 331 行 / 全开视觉匹配）：整页从 `74.7s`（ORT CPU）加速至 **`~30.6s`**，正式签名 R8 Release APK 仅 **`~18 MiB`**。
+  - 实测参考（`vivo V2302A` 天玑 9200+，`345×16384` 超长图 / 25 窗 / 331 行 / 全开视觉匹配）：整页从 `74.7s`（ORT CPU）加速至 **`~30.6s`**，正式签名 R8 Release APK 仅 **`~13 MiB`**。
 - **任意长度对话长图不截断、不 OOM**：
   - 空白带自适应切窗（`windowing.cpp`）+ 原图坐标系融合（`postprocess.cpp`）+ 1600px 分块矢量打框预览（`DetectionOverlayViewer.kt`），支持 20,000+ px 超长图流畅对照；
   - 全部图像切窗、双极性 8 连通域物理切行（零 OpenCV 依赖）、张量预处理与模板匹配均下沉至纯 C++20 核心库。
@@ -37,9 +37,9 @@
 
 | 模块 | 文件 | 体积 | 说明 |
 | --- | --- | --- | --- |
-| **基础转录包（必选）** | `mnn/det_boxes_order_ln_w8.mnn`<br>`mnn/rec_small_fp16.mnn`<br>`models/ocr_vocab.yml` | ~43 MiB | 11 类 PP-DocLayoutV3（23 层 Fused-LN, W8 对称量化）+ PP-OCRv6 Small FP16 + 词表 |
-| **高精度级联包（可选）** | `mnn/rec_medium_fp16.mnn` | ~37 MiB | PP-OCRv6 Medium FP16，仅对弱字/低置信度行自动复核 |
-| **视觉匹配扩展包（可选）** | `mnn/ccip_caformer_24_ln_w8.mnn`<br>`avatar/catalog.json.zst`<br>`avatar/stage1_embeddings_svd128.npz`<br>`avatar/stage2_templates.avifs.pack` | ~52 MiB | 76 层 Fused-LN CCIP W8 + 无中心 SVD-128 FP16 向量库 + `MMTAVIF2`（`libavif`/`libdav1d` 4:4:4）模板容器 |
+| **基础转录包（必选）** | `mnn/det_boxes_order_ln_w8.mnn`<br>`mnn/rec_small_w8.mnn`<br>`models/ocr_vocab.yml` | ~38 MiB | 11 类 PP-DocLayoutV3（23 层 Fused-LN, W8）+ PP-OCRv6 Small W8 + 词表 |
+| **高精度级联包（可选）** | `mnn/rec_medium_w8.mnn` | ~19 MiB | PP-OCRv6 Medium W8，仅对弱字/低置信度行自动复核 |
+| **视觉匹配扩展包（可选）** | `mnn/ccip_caformer_24_ln_w4.mnn`<br>`avatar/catalog.json.zst`<br>`avatar/stage1_embeddings_svd128.npz`<br>`avatar/stage2_templates_q80.avifs.pack` | ~32 MiB | 76 层 Fused-LN CCIP W4-HQQ + 无中心 SVD-128 FP16 向量库 + `MMTAVIF2`（`libavif`/`libdav1d` 4:4:4 q80）模板容器 |
 
 ## 仓库结构
 

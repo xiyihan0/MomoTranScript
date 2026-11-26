@@ -127,6 +127,10 @@ object ModelScopeDownloader {
                     partFile.copyTo(targetFile, overwrite = true)
                     partFile.delete()
                 }
+                for (legacy in fileSpec.legacyFallbackPaths) {
+                    val lf = File(bundleRoot, legacy)
+                    if (lf.isFile) lf.delete()
+                }
             } catch (e: Exception) {
                 partFile.delete()
                 throw e
@@ -137,34 +141,39 @@ object ModelScopeDownloader {
     fun deletePack(pack: ModelPackSpec, bundleRoot: File): Int {
         var deleted = 0
         for (f in pack.files) {
-            val target = File(bundleRoot, f.relativePath)
-            if (target.isFile && target.delete()) {
-                deleted++
+            val allPaths = listOf(f.relativePath) + f.legacyFallbackPaths
+            for (rel in allPaths) {
+                val target = File(bundleRoot, rel)
+                if (target.isFile && target.delete()) {
+                    deleted++
+                }
+                File(target.parentFile, "${target.name}.part").delete()
             }
-            File(target.parentFile, "${target.name}.part").delete()
         }
         return deleted
     }
 
     private fun fetchManifestHashes(config: ModelScopeConfig): Map<String, String> {
-        return runCatching {
-            val url = buildResolveUrl(config, "bundle_manifest.json")
-            val conn = openConnectionFollowingRedirects(url, config.accessToken.trim())
-            try {
-                if (conn.responseCode !in 200..299) return emptyMap()
-                val text = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-                val root = Json.parseToJsonElement(text).jsonObject
-                val filesObj = root["files"]?.jsonObject ?: return emptyMap()
-                val out = HashMap<String, String>()
-                for ((rel, elem) in filesObj) {
-                    val sha = elem.jsonObject["sha256"]?.jsonPrimitive?.content
-                    if (!sha.isNullOrBlank()) out[rel] = sha
+        val out = HashMap<String, String>()
+        for (manifestName in listOf("bundle_manifest.json", "manifest.json")) {
+            runCatching {
+                val url = buildResolveUrl(config, manifestName)
+                val conn = openConnectionFollowingRedirects(url, config.accessToken.trim())
+                try {
+                    if (conn.responseCode !in 200..299) return@runCatching
+                    val text = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                    val root = Json.parseToJsonElement(text).jsonObject
+                    val filesObj = root["files"]?.jsonObject ?: return@runCatching
+                    for ((rel, elem) in filesObj) {
+                        val sha = elem.jsonObject["sha256"]?.jsonPrimitive?.content
+                        if (!sha.isNullOrBlank()) out[rel] = sha
+                    }
+                } finally {
+                    conn.disconnect()
                 }
-                out
-            } finally {
-                conn.disconnect()
             }
-        }.getOrDefault(emptyMap())
+        }
+        return out
     }
 
     private suspend fun downloadFileWithSha256(

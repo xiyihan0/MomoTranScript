@@ -85,7 +85,11 @@ class OnnxAvatarMatcher(
     private val insertEmbCache = ArrayList<CachedThumbEmb>()
 
     init {
-        val modelFile = File(bundleRoot, "mnn/ccip_caformer_24_ln_w8.mnn")
+        val modelFile = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+            bundleRoot,
+            dev.momotranscript.app.model.ModelPackCatalog.CCIP_MODEL,
+            dev.momotranscript.app.model.ModelPackCatalog.CCIP_LEGACY,
+        )
         require(modelFile.isFile) { "缺少 MNN Fused-LN CCIP 模型：${modelFile.absolutePath}（请前往「模型」页更新视觉包）" }
         val avatarDir = File(bundleRoot, "avatar")
         val tGal = System.nanoTime()
@@ -101,7 +105,8 @@ class OnnxAvatarMatcher(
         }
         val cachePath = if (cacheDir != null && ccipReq != NativeCore.MNN_BACKEND_CPU_FP16) {
             val dir = File(cacheDir, "mnn_cache").apply { mkdirs() }
-            File(dir, "ccip_ln_fp16_b${ccipReq}.bin").absolutePath
+            val tag = modelFile.nameWithoutExtension
+            File(dir, "${tag}_fp16_b${ccipReq}.bin").absolutePath
         } else {
             ""
         }
@@ -670,7 +675,11 @@ class OnnxAvatarMatcher(
         private const val TOP_K_SKINS = 3
 
         fun isAvailable(bundleRoot: File): Boolean {
-            val modelMnn = File(bundleRoot, "mnn/ccip_caformer_24_ln_w8.mnn")
+            val modelMnn = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+                bundleRoot,
+                dev.momotranscript.app.model.ModelPackCatalog.CCIP_MODEL,
+                dev.momotranscript.app.model.ModelPackCatalog.CCIP_LEGACY,
+            )
             val npzSvd = File(bundleRoot, "avatar/stage1_embeddings_svd128.npz")
             val npzLegacy = File(bundleRoot, "avatar/stage1_embeddings.npz")
             val catZst = File(bundleRoot, "avatar/catalog.json.zst")

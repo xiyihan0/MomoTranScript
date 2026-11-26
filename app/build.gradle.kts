@@ -26,8 +26,8 @@ android {
     applicationId = "dev.momotranscript.app"
     minSdk = 26
     targetSdk = 36
-    versionCode = 15
-    versionName = "0.5.3"
+    versionCode = 16
+    versionName = "0.5.4"
 
     buildConfigField("String", "HOMEPAGE_URL", "\"https://www.xiyihan.cn/momotranscript/\"")
     buildConfigField("String", "PRIVACY_POLICY_URL", "\"https://www.xiyihan.cn/momotranscript/privacy.html\"")
@@ -101,7 +101,11 @@ android {
 
   packaging {
     resources {
-      excludes += "/META-INF/{AL2.0,LGPL2.1}"
+      excludes += listOf(
+        "/META-INF/{AL2.0,LGPL2.1}",
+        // Strip unused BouncyCastle post-quantum parameter tables pulled in transitively by pdfbox-android (~4.0 MiB)
+        "org/bouncycastle/pqc/**",
+      )
     }
   }
 }

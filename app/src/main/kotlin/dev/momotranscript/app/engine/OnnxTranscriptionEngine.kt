@@ -68,9 +68,17 @@ class OnnxTranscriptionEngine(
     val initProfile: EngineInitProfile
 
     init {
-        val detFile = File(bundleRoot, "mnn/det_boxes_order_ln_w8.mnn")
-        val recSmallFile = File(bundleRoot, "mnn/rec_small_fp16.mnn")
-        val recMedFile = File(bundleRoot, "mnn/rec_medium_fp16.mnn")
+        val detFile = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.DET_MODEL)
+        val recSmallFile = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+            bundleRoot,
+            dev.momotranscript.app.model.ModelPackCatalog.REC_SMALL_MODEL,
+            dev.momotranscript.app.model.ModelPackCatalog.REC_SMALL_LEGACY,
+        )
+        val recMedFile = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+            bundleRoot,
+            dev.momotranscript.app.model.ModelPackCatalog.REC_MEDIUM_MODEL,
+            dev.momotranscript.app.model.ModelPackCatalog.REC_MEDIUM_LEGACY,
+        )
         val vocabFile = File(bundleRoot, "models/ocr_vocab.yml")
 
         require(detFile.isFile) { "缺少 MNN Fused-LN 检测模型：${detFile.absolutePath}（请前往「模型」页更新基础转录包）" }

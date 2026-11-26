@@ -19,7 +19,11 @@ class ModelPackCatalogTest {
         assertEquals(listOf("core_text", "rec_medium", "moetalk_avatar"), ids)
         val corePack = ModelPackCatalog.packs.first { it.id == "core_text" }
         assertTrue(corePack.required)
-        assertTrue(corePack.approxTotalMiB in 40.0..45.0)
+        assertTrue(corePack.approxTotalMiB in 35.0..41.0)
+        val medPack = ModelPackCatalog.packs.first { it.id == "rec_medium" }
+        assertTrue(medPack.approxTotalMiB in 15.0..22.0)
+        val avatarPack = ModelPackCatalog.packs.first { it.id == "moetalk_avatar" }
+        assertTrue(avatarPack.approxTotalMiB in 28.0..36.0)
     }
 
     @Test
@@ -36,5 +40,21 @@ class ModelPackCatalogTest {
         val after = ModelPackCatalog.inspectInstalled(root)
         assertTrue(after.first { it.spec.id == "core_text" }.isReady)
         assertFalse(after.first { it.spec.id == "moetalk_avatar" }.isReady)
+    }
+
+    @Test
+    fun inspectInstalledAcceptsLegacyFallbackFiles() {
+        val root = tempFolder.newFolder("legacy_bundles")
+        for (rel in listOf(
+            ModelPackCatalog.DET_MODEL,
+            ModelPackCatalog.REC_SMALL_LEGACY,
+            "models/ocr_vocab.yml",
+        )) {
+            val f = File(root, rel)
+            f.parentFile?.mkdirs()
+            f.writeBytes(byteArrayOf(1, 2, 3))
+        }
+        val st = ModelPackCatalog.inspectInstalled(root).first { it.spec.id == "core_text" }
+        assertTrue(st.isReady)
     }
 }
