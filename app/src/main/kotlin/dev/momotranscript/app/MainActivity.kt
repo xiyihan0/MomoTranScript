@@ -347,6 +347,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
     var packStatuses by remember { mutableStateOf(ModelPackCatalog.inspectInstalled(bundleRoot)) }
     val corePackReady = packStatuses.filter { it.spec.required }.all { it.isReady }
     val visualPackReady = OnnxAvatarMatcher.isAvailable(bundleRoot)
+    val cfid6PackReady = OnnxAvatarMatcher.isCfid6Available(bundleRoot)
 
     var msConfig by remember { mutableStateOf(loadModelScopeConfig(context)) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
@@ -361,6 +362,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
 
     var useMoeTalkBranches by remember { mutableStateOf(true) }
     var useCcipVisualMatch by remember { mutableStateOf(true) }
+    var useCfid6Extension by remember { mutableStateOf(true) }
     var selectedBackendMode by remember { mutableIntStateOf(loadBackendMode(context)) }
 
     var isJobRunning by remember { mutableStateOf(false) }
@@ -969,6 +971,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                 0 -> TranscribeTab(
                     corePackReady = corePackReady,
                     visualPackReady = visualPackReady,
+                    cfid6PackReady = cfid6PackReady,
                     inputSummary = inputSummary,
                     isScanningInput = isScanningInput,
                     scanError = scanError,
@@ -976,6 +979,8 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                     onToggleBranches = { useMoeTalkBranches = it },
                     useCcipVisualMatch = useCcipVisualMatch,
                     onToggleCcip = { useCcipVisualMatch = it },
+                    useCfid6Extension = useCfid6Extension,
+                    onToggleCfid6 = { useCfid6Extension = it },
                     backendMode = selectedBackendMode,
                     onSelectBackendMode = { mode ->
                         selectedBackendMode = mode
@@ -1058,6 +1063,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                                 displayNames = currentInput.items.map { it.displayName },
                                 useBranches = useMoeTalkBranches,
                                 useCcipVisual = useCcipVisualMatch && visualPackReady,
+                                useCfid6Extension = useCcipVisualMatch && visualPackReady && useCfid6Extension && cfid6PackReady,
                                 backendMode = selectedBackendMode,
                             )
                             is BatchInputSummary.PdfDocument -> TranscriptionJobSpec(
@@ -1068,6 +1074,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                                 displayNames = listOf(currentInput.displayName),
                                 useBranches = useMoeTalkBranches,
                                 useCcipVisual = useCcipVisualMatch && visualPackReady,
+                                useCfid6Extension = useCcipVisualMatch && visualPackReady && useCfid6Extension && cfid6PackReady,
                                 backendMode = selectedBackendMode,
                             )
                         }
@@ -1242,6 +1249,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
 private fun TranscribeTab(
     corePackReady: Boolean,
     visualPackReady: Boolean,
+    cfid6PackReady: Boolean,
     inputSummary: BatchInputSummary?,
     isScanningInput: Boolean,
     scanError: String?,
@@ -1249,6 +1257,8 @@ private fun TranscribeTab(
     onToggleBranches: (Boolean) -> Unit,
     useCcipVisualMatch: Boolean,
     onToggleCcip: (Boolean) -> Unit,
+    useCfid6Extension: Boolean,
+    onToggleCfid6: (Boolean) -> Unit,
     backendMode: Int,
     onSelectBackendMode: (Int) -> Unit,
     isJobRunning: Boolean,
@@ -1458,10 +1468,23 @@ private fun TranscribeTab(
                     icon = Icons.Rounded.Face,
                     title = "视觉头像与差分匹配",
                     subtitle = if (visualPackReady) "外部视觉扩展包已就绪，自动匹配对应头像与差分索引"
-                    else "未下载外部视觉扩展包（可选 +32 MiB）",
+                    else "未下载视觉匹配与表情扩展包（可选 +27 MiB）",
                     checked = useCcipVisualMatch && visualPackReady,
                     enabled = !isJobRunning && visualPackReady,
                     onCheckedChange = onToggleCcip,
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 6.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
+                OptionToggleRow(
+                    icon = Icons.Rounded.Star,
+                    title = "MoeTalk 社区拓展差分（CFID_6）",
+                    subtitle = if (cfid6PackReady) "已就绪（+245 套 MoeTalk 内置自定拓展差分，如宫子435），按需开关"
+                    else "未下载社区拓展差分包（可选，可在「模型」页单独下载）",
+                    checked = useCfid6Extension && cfid6PackReady && useCcipVisualMatch && visualPackReady,
+                    enabled = !isJobRunning && visualPackReady && useCcipVisualMatch && cfid6PackReady,
+                    onCheckedChange = onToggleCfid6,
                 )
                 HorizontalDivider(
                     modifier = Modifier.padding(vertical = 6.dp),

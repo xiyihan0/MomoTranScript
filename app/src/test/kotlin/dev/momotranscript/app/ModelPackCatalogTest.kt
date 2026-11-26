@@ -16,7 +16,7 @@ class ModelPackCatalogTest {
     @Test
     fun catalogContainsExpectedModularPacks() {
         val ids = ModelPackCatalog.packs.map { it.id }
-        assertEquals(listOf("core_text", "rec_medium", "moetalk_avatar"), ids)
+        assertEquals(listOf("core_text", "rec_medium", "moetalk_avatar", "moetalk_cfid6"), ids)
         val corePack = ModelPackCatalog.packs.first { it.id == "core_text" }
         assertTrue(corePack.required)
         assertTrue(corePack.approxTotalMiB in 35.0..41.0)
@@ -24,6 +24,9 @@ class ModelPackCatalogTest {
         assertTrue(medPack.approxTotalMiB in 15.0..22.0)
         val avatarPack = ModelPackCatalog.packs.first { it.id == "moetalk_avatar" }
         assertTrue(avatarPack.approxTotalMiB in 24.0..32.0)
+        val cfid6Pack = ModelPackCatalog.packs.first { it.id == "moetalk_cfid6" }
+        assertFalse(cfid6Pack.required)
+        assertTrue(cfid6Pack.approxTotalMiB in 4.0..7.0)
     }
 
     @Test

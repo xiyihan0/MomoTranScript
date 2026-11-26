@@ -55,6 +55,9 @@ object ModelPackCatalog {
     const val EXPR_VOCAB = "avatar/vocab_48.json"
     const val STAGE2_PACK = "avatar/stage2_templates_q80.avifs.pack"
     const val STAGE2_LEGACY = "avatar/stage2_templates.avifs.pack"
+    const val CFID6_CATALOG = "avatar/cfid6_catalog.json.zst"
+    const val CFID6_STAGE1_PE256 = "avatar/cfid6_embeddings_pe256.npz"
+    const val CFID6_STAGE2_PACK = "avatar/cfid6_templates_q80.avifs.pack"
 
     fun resolveFile(bundleRoot: File, primary: String, vararg legacyFallbacks: String): File {
         val p = File(bundleRoot, primary)
@@ -98,6 +101,17 @@ object ModelPackCatalog {
                 AssetFileSpec(STAGE1_PE256, 2.44, listOf(STAGE1_SVD_LEGACY)),
                 AssetFileSpec(EXPR_VOCAB, 0.01),
                 AssetFileSpec(STAGE2_PACK, 9.15, listOf(STAGE2_LEGACY)),
+            ),
+        ),
+        ModelPackSpec(
+            id = "moetalk_cfid6",
+            title = "社区拓展差分包（可选 · CFID_6）",
+            subtitle = "MoeTalk 内置自定 245 套拓展皮肤（52,150 差分，含宫子435等），依赖上方视觉包",
+            required = false,
+            files = listOf(
+                AssetFileSpec(CFID6_CATALOG, 0.18),
+                AssetFileSpec(CFID6_STAGE1_PE256, 0.11),
+                AssetFileSpec(CFID6_STAGE2_PACK, 4.70),
             ),
         ),
     )

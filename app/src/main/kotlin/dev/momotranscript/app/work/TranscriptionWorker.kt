@@ -51,6 +51,7 @@ data class TranscriptionJobSpec(
     val displayNames: List<String>,
     val useBranches: Boolean = true,
     val useCcipVisual: Boolean = true,
+    val useCfid6Extension: Boolean = false,
     val backendMode: Int = OnnxTranscriptionEngine.BACKEND_AUTO_GPU_CPU,
 )
 
@@ -187,7 +188,7 @@ class TranscriptionWorker(
         )
         appendLog("硬件探针: ${NativeCore.mnnDeviceInfo()}")
         appendLog(
-            "任务: kind=${spec.kind} title=${spec.title} branches=${spec.useBranches} ccip=${spec.useCcipVisual} backendMode=${spec.backendMode}",
+            "任务: kind=${spec.kind} title=${spec.title} branches=${spec.useBranches} ccip=${spec.useCcipVisual} cfid6=${spec.useCfid6Extension} backendMode=${spec.backendMode}",
         )
         pushProgress(initialDone, initialTotal, if (initialDone > 0) "断点恢复" else "初始化", startStatusText)
 
@@ -254,12 +255,13 @@ class TranscriptionWorker(
                         bundleRoot = bundleRoot,
                         backendMode = spec.backendMode,
                         cacheDir = applicationContext.cacheDir,
+                        includeCfid6 = spec.useCfid6Extension,
                     ).also { m ->
                         val cp = m.initProfile
                         appendLog(
-                            "CCIP 就绪 (threads=${cp.intraOpThreads}, EP=${cp.ep}): gallery=${cp.galleryLoadMs}ms " +
+                            "视觉编码就绪 (threads=${cp.intraOpThreads}, EP=${cp.ep}, cfid6=${m.gallery.hasCfid6Loaded}): gallery=${cp.galleryLoadMs}ms " +
                                 "(skins=${cp.skinCount}, chars=${cp.charCount}, emojis=${cp.emojiCount}) " +
-                                "ccip=${cp.ccipLoadMs}ms | ${currentMemMb()}",
+                                "model=${cp.ccipLoadMs}ms | ${currentMemMb()}",
                         )
                     }
                 } else {

@@ -62,6 +62,7 @@ class OnnxAvatarMatcher(
     private val intraOpThreads: Int = Runtime.getRuntime().availableProcessors().coerceIn(2, 4),
     private val backendMode: Int = OnnxTranscriptionEngine.BACKEND_AUTO_GPU_CPU,
     private val cacheDir: File? = null,
+    includeCfid6: Boolean = false,
 ) : Closeable {
 
     val gallery: AvatarGallery
@@ -105,7 +106,7 @@ class OnnxAvatarMatcher(
         }
         require(modelFile.isFile) { "缺少 MNN 视觉编码模型：${modelFile.absolutePath}（请前往「模型」页更新视觉包）" }
         val tGal = System.nanoTime()
-        gallery = AvatarGallery(avatarDir, preferPe256 = useUnified)
+        gallery = AvatarGallery(avatarDir, preferPe256 = useUnified, includeCfid6 = includeCfid6 && useUnified)
         val galMs = (System.nanoTime() - tGal) / 1_000_000L
 
         val ccipReq = when (backendMode) {
@@ -571,8 +572,16 @@ class OnnxAvatarMatcher(
                                 decoded.stackRgb, decoded.count, decoded.tplSize, decoded.varWeights,
                             )
                             stage2Ns += System.nanoTime() - tSt2
-                            val minStruct = if (s1Raw >= HIGH_S1_RELAX_THRESHOLD) CHARFACE_RELAX_STRUCT else CHARFACE_STRUCT_THRESHOLD
-                            val minDiff = if (s1Raw >= HIGH_S1_RELAX_THRESHOLD) CHARFACE_RELAX_DIFF else CHARFACE_DIFF_THRESHOLD
+                            val minStruct = when {
+                                s1Raw >= HIGH_S1_RELAX_THRESHOLD -> CHARFACE_RELAX_STRUCT
+                                s1Raw < LOW_S1_STRICT_THRESHOLD -> CHARFACE_STRICT_STRUCT
+                                else -> CHARFACE_STRUCT_THRESHOLD
+                            }
+                            val minDiff = when {
+                                s1Raw >= HIGH_S1_RELAX_THRESHOLD -> CHARFACE_RELAX_DIFF
+                                s1Raw < LOW_S1_STRICT_THRESHOLD -> CHARFACE_STRICT_DIFF
+                                else -> CHARFACE_DIFF_THRESHOLD
+                            }
                             if (st2.structZncc < minStruct || st2.diffZncc < minDiff) {
                                 continue
                             }
@@ -734,6 +743,9 @@ class OnnxAvatarMatcher(
         private const val CHARFACE_STAGE1_THRESHOLD = 0.76f
         private const val CHARFACE_STRUCT_THRESHOLD = 0.58f
         private const val CHARFACE_DIFF_THRESHOLD = 0.45f
+        private const val LOW_S1_STRICT_THRESHOLD = 0.80f
+        private const val CHARFACE_STRICT_STRUCT = 0.72f
+        private const val CHARFACE_STRICT_DIFF = 0.65f
         private const val HIGH_S1_RELAX_THRESHOLD = 0.82f
         private const val CHARFACE_RELAX_STRUCT = 0.52f
         private const val CHARFACE_RELAX_DIFF = 0.38f
@@ -741,6 +753,15 @@ class OnnxAvatarMatcher(
         private const val EMOJI_STRUCT_THRESHOLD = 0.70f
         private const val CUSTOM_CLUSTER_THRESHOLD = 0.86f
         private const val TOP_K_SKINS = 5
+
+        fun isCfid6Available(bundleRoot: File): Boolean {
+            val unifiedMnn = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL)
+            val npzPe = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.STAGE1_PE256)
+            val cf6Cat = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.CFID6_CATALOG)
+            val cf6Emb = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.CFID6_STAGE1_PE256)
+            val cf6Pack = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.CFID6_STAGE2_PACK)
+            return unifiedMnn.isFile && npzPe.isFile && cf6Cat.isFile && cf6Emb.isFile && cf6Pack.isFile
+        }
 
         fun isAvailable(bundleRoot: File): Boolean {
             val unifiedMnn = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL)

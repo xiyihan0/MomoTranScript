@@ -110,7 +110,11 @@ data class DecodedSkinTemplates(
  * - `avatar/stage1_embeddings.npz` (FP16 -> FP32 Stage-1 embeddings)
  * - `avatar/stage2_templates.avifs.pack` (`MMTAVIF1` O(1) seek container for Stage-2 templates)
  */
-class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
+class AvatarGallery(
+    avatarDir: File,
+    preferPe256: Boolean = false,
+    includeCfid6: Boolean = false,
+) : Closeable {
 
     val catalog: AvatarCatalog
     val projMatrix: FloatMatrix? // (768, K) when SVD-compressed Stage-1 embeddings are loaded
@@ -119,17 +123,23 @@ class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
     val skinEmb: FloatMatrix
     val emojiEmb: FloatMatrix
     val tplSize: Int
+    val hasCfid6Loaded: Boolean
 
     val canonToDefaultHead: Map<String, String>
     val officialCanons: Set<String>
     val packV2ToMoetalkExpr: Map<Pair<String, Int>, String>
 
+    private val baseSkinCount: Int
     private val packRaf: RandomAccessFile?
     private val packPayloadBase: Long
     private val packMaskIsUint8: Boolean
     private val skinPackByIndex: Map<Int, AvifsPackSkinEntry>
     private val emojiChunks: List<AvifsPackEmojiChunk>
-    private val skinCache = LinkedHashMap<Int, DecodedSkinTemplates?>(32, 0.75f, true)
+    private val cfid6PackRaf: RandomAccessFile?
+    private val cfid6PayloadBase: Long
+    private val cfid6MaskIsUint8: Boolean
+    private val cfid6SkinPackByIndex: Map<Int, AvifsPackSkinEntry>
+    private val skinCache = LinkedHashMap<Int, DecodedSkinTemplates?>(16, 0.75f, true)
     private val emojiChunkCache = LinkedHashMap<Int, ByteArray?>(8, 0.75f, true)
 
     init {
@@ -141,11 +151,12 @@ class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
             rawJsonFile.isFile -> rawJsonFile.readText(StandardCharsets.UTF_8)
             else -> error("缺少角色目录：${zstFile.absolutePath}")
         }
-        catalog = json.decodeFromString(catalogText)
-        require(catalog.kind == "mmt_avatar_gallery_v1") {
-            "不支持的视觉索引格式：${catalog.kind}"
+        val baseCatalog = json.decodeFromString<AvatarCatalog>(catalogText)
+        require(baseCatalog.kind == "mmt_avatar_gallery_v1") {
+            "不支持的视觉索引格式：${baseCatalog.kind}"
         }
-        tplSize = catalog.options.tplSize
+        tplSize = baseCatalog.options.tplSize
+        baseSkinCount = baseCatalog.skins.size
 
         val peNpzFile = File(avatarDir, "stage1_embeddings_pe256.npz")
         val svdNpzFile = File(avatarDir, "stage1_embeddings_svd128.npz")
@@ -162,8 +173,83 @@ class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
         val defaultCols = projMatrix?.cols ?: matrices["skin_emb"]?.cols ?: matrices["char_emb"]?.cols ?: 768
         charEmb = matrices["char_emb"] ?: FloatMatrix(0, defaultCols, FloatArray(0))
         charEmbLowres = matrices["char_emb_lowres"]
-        skinEmb = matrices["skin_emb"] ?: FloatMatrix(0, defaultCols, FloatArray(0))
+        val baseSkinEmb = matrices["skin_emb"] ?: FloatMatrix(0, defaultCols, FloatArray(0))
         emojiEmb = matrices["emoji_emb"] ?: FloatMatrix(0, defaultCols, FloatArray(0))
+
+        // Optionally mount modular CFID_6 community expression add-on pack (PE-256 only)
+        var mergedCatalog = baseCatalog
+        var mergedSkinEmb = baseSkinEmb
+        var extRaf: RandomAccessFile? = null
+        var extBase = 0L
+        var extU8 = true
+        var extPackMap: Map<Int, AvifsPackSkinEntry> = emptyMap()
+        var extLoaded = false
+
+        val cf6CatZst = File(avatarDir, "cfid6_catalog.json.zst")
+        val cf6CatRaw = File(avatarDir, "cfid6_catalog.json")
+        val cf6EmbFile = File(avatarDir, "cfid6_embeddings_pe256.npz")
+        val cf6PackFile = File(avatarDir, "cfid6_templates_q80.avifs.pack")
+        if (includeCfid6 && preferPe256 && projMatrix == null &&
+            (cf6CatZst.isFile || cf6CatRaw.isFile) && cf6EmbFile.isFile && cf6PackFile.isFile
+        ) {
+            runCatching {
+                val cf6Text = if (cf6CatZst.isFile) {
+                    decompressZst(cf6CatZst.readBytes()).toString(StandardCharsets.UTF_8)
+                } else {
+                    cf6CatRaw.readText(StandardCharsets.UTF_8)
+                }
+                val cf6Cat = json.decodeFromString<AvatarCatalog>(cf6Text)
+                val cf6Mat = NpyReader.loadNpzMatrices(cf6EmbFile)["skin_emb"]
+                if (cf6Mat != null && cf6Mat.cols == baseSkinEmb.cols && cf6Mat.rows == cf6Cat.skins.size && cf6Mat.rows > 0) {
+                    val raf = RandomAccessFile(cf6PackFile, "r")
+                    val magic = ByteArray(8)
+                    raf.readFully(magic)
+                    if (String(magic, StandardCharsets.US_ASCII) == "MMTAVIF1") {
+                        val lenBytes = ByteArray(4)
+                        raf.readFully(lenBytes)
+                        val hdrLen = ByteBuffer.wrap(lenBytes).order(ByteOrder.LITTLE_ENDIAN).int
+                        val hdrBytes = ByteArray(hdrLen)
+                        raf.readFully(hdrBytes)
+                        val hdr = json.decodeFromString<AvifsPackHeader>(String(hdrBytes, StandardCharsets.UTF_8))
+                        extRaf = raf
+                        extBase = 12L + hdrLen.toLong()
+                        extU8 = hdr.maskDtype == "uint8" || hdr.schemaVersion >= 2
+                        extPackMap = hdr.skins.associateBy { it.index + baseSkinCount }
+
+                        val shiftedSkins = cf6Cat.skins.map { it.copy(skinIndex = it.skinIndex + baseSkinCount) }
+                        val mergedAliases = HashMap<String, MutableList<String>>()
+                        for ((k, v) in baseCatalog.aliases) mergedAliases[k] = v.toMutableList()
+                        for ((k, v) in cf6Cat.aliases) {
+                            val list = mergedAliases.getOrPut(k) { ArrayList() }
+                            for (c in v) if (c !in list) list.add(c)
+                        }
+                        mergedCatalog = baseCatalog.copy(
+                            skins = baseCatalog.skins + shiftedSkins,
+                            aliases = mergedAliases,
+                        )
+                        val combinedData = FloatArray(baseSkinEmb.data.size + cf6Mat.data.size)
+                        System.arraycopy(baseSkinEmb.data, 0, combinedData, 0, baseSkinEmb.data.size)
+                        System.arraycopy(cf6Mat.data, 0, combinedData, baseSkinEmb.data.size, cf6Mat.data.size)
+                        mergedSkinEmb = FloatMatrix(baseSkinEmb.rows + cf6Mat.rows, baseSkinEmb.cols, combinedData)
+                        extLoaded = true
+                    } else {
+                        raf.close()
+                    }
+                }
+            }.onFailure {
+                runCatching { extRaf?.close() }
+                extRaf = null
+                extPackMap = emptyMap()
+                extLoaded = false
+            }
+        }
+        catalog = mergedCatalog
+        skinEmb = mergedSkinEmb
+        cfid6PackRaf = extRaf
+        cfid6PayloadBase = extBase
+        cfid6MaskIsUint8 = extU8
+        cfid6SkinPackByIndex = extPackMap
+        hasCfid6Loaded = extLoaded
 
         // Build MoeTalk official asset lookups
         val headMap = HashMap<String, String>()
@@ -274,16 +360,19 @@ class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
 
     fun getSkinTemplates(skinIndex: Int): DecodedSkinTemplates? {
         if (skinCache.containsKey(skinIndex)) return skinCache[skinIndex]
-        val raf = packRaf ?: return null
-        val entry = skinPackByIndex[skinIndex] ?: return null
+        val isCfid6 = skinIndex >= baseSkinCount && cfid6PackRaf != null
+        val raf = (if (isCfid6) cfid6PackRaf else packRaf) ?: return null
+        val payloadBase = if (isCfid6) cfid6PayloadBase else packPayloadBase
+        val maskIsUint8 = if (isCfid6) cfid6MaskIsUint8 else packMaskIsUint8
+        val entry = (if (isCfid6) cfid6SkinPackByIndex[skinIndex] else skinPackByIndex[skinIndex]) ?: return null
         if (entry.count <= 0 || entry.avifsLen <= 0) return null
 
         val avifsBytes = ByteArray(entry.avifsLen)
         val maskCompressed = ByteArray(entry.maskLen)
         synchronized(raf) {
-            raf.seek(packPayloadBase + entry.avifsOffset)
+            raf.seek(payloadBase + entry.avifsOffset)
             raf.readFully(avifsBytes)
-            raf.seek(packPayloadBase + entry.maskOffset)
+            raf.seek(payloadBase + entry.maskOffset)
             raf.readFully(maskCompressed)
         }
 
@@ -306,7 +395,7 @@ class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
         // Inflate zlib-compressed variance mask (v2 uint8 [0..255] or legacy v1 float16)
         val maskBytes = inflateZlib(maskCompressed)
         val varWeights = FloatArray(tplSize * tplSize)
-        if (maskBytes != null && (packMaskIsUint8 || maskBytes.size == varWeights.size) && maskBytes.size >= varWeights.size) {
+        if (maskBytes != null && (maskIsUint8 || maskBytes.size == varWeights.size) && maskBytes.size >= varWeights.size) {
             for (i in varWeights.indices) {
                 varWeights[i] = (maskBytes[i].toInt() and 0xFF) / 255.0f
             }
@@ -322,7 +411,7 @@ class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
         }
 
         val tpl = DecodedSkinTemplates(restored, varWeights, entry.count, tplSize)
-        if (skinCache.size >= 32) {
+        if (skinCache.size >= 16) {
             val eldest = skinCache.keys.firstOrNull()
             if (eldest != null) skinCache.remove(eldest)
         }
@@ -353,6 +442,7 @@ class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
 
     override fun close() {
         runCatching { packRaf?.close() }
+        runCatching { cfid6PackRaf?.close() }
     }
 
     companion object {
