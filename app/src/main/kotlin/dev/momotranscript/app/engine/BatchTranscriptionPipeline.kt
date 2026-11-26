@@ -18,6 +18,9 @@ import dev.momotranscript.app.nativecore.NativeAssembledMessage
 import dev.momotranscript.app.nativecore.NativeDetectedElement
 import dev.momotranscript.app.nativecore.WindowBox
 import dev.momotranscript.app.ui.PagePreviewRecord
+import dev.momotranscript.app.work.CheckpointBranchInput
+import dev.momotranscript.app.work.CheckpointStore
+import dev.momotranscript.app.work.TranscriptionCheckpoint
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -114,6 +117,9 @@ object BatchTranscriptionPipeline {
         avatarMatcher: OnnxAvatarMatcher? = null,
         packMode: MoeTalkBranchPacker.MultiItemPackMode = MoeTalkBranchPacker.MultiItemPackMode.BRANCH_PER_ITEM,
         previewCacheDir: File? = null,
+        checkpointDir: File? = null,
+        jobId: String = "",
+        resumeCheckpoint: TranscriptionCheckpoint? = null,
         onLog: ((String) -> Unit)? = null,
         onPageCompleted: ((PartialBatchSnapshot) -> Unit)? = null,
         onProgress: (BatchProgress) -> Unit,
@@ -133,8 +139,35 @@ object BatchTranscriptionPipeline {
         var totalLines = 0
         var matchedOfficialAvatars = 0
         var matchedVisualAssets = 0
+        var priorElapsedMs = 0L
+        var startIndex = 0
         var lastMoeJsonFlushCostMs = 0L
         var pagesSinceMoeJsonFlush = 0
+
+        if (resumeCheckpoint != null && resumeCheckpoint.completedItems > 0) {
+            startIndex = resumeCheckpoint.completedItems
+            priorElapsedMs = resumeCheckpoint.elapsedMs
+            totalWindows = resumeCheckpoint.totalWindows
+            totalLines = resumeCheckpoint.totalLines
+            matchedOfficialAvatars = resumeCheckpoint.matchedOfficialAvatars
+            matchedVisualAssets = resumeCheckpoint.matchedVisualAssets
+            customCounter = resumeCheckpoint.customCounter
+            imageCounter = resumeCheckpoint.imageCounter
+            customKeyToId.putAll(resumeCheckpoint.customKeyToId)
+            tempChars.putAll(resumeCheckpoint.tempChars)
+            if (checkpointDir != null && resumeCheckpoint.tempImageIds.isNotEmpty()) {
+                tempImages.putAll(CheckpointStore.loadTempImages(checkpointDir, resumeCheckpoint.tempImageIds))
+            }
+            for (bi in resumeCheckpoint.branchInputs) {
+                branchInputs.add(MoeTalkBranchPacker.BranchInput(bi.label, bi.messages))
+            }
+            previewPages.addAll(resumeCheckpoint.previewPages)
+            scriptBuilder.append(resumeCheckpoint.combinedMomoScript)
+            onLog?.invoke(
+                "断点恢复：已跳过前 $startIndex/${resumeCheckpoint.totalItems} 页" +
+                    "（累计 ${totalWindows}w ${totalLines}L，已恢复 ${tempImages.size} 张缓存裁图）",
+            )
+        }
 
         val tentativeTitle: String = when (input) {
             is BatchInputSummary.Images ->
@@ -157,6 +190,32 @@ object BatchTranscriptionPipeline {
         }
 
         fun emitPageSnapshot(completed: Int, total: Int, perf: PagePerfRecord) {
+            val totalElapsedSoFar = priorElapsedMs + (System.nanoTime() - t0) / 1_000_000L
+            if (checkpointDir != null && completed < total) {
+                CheckpointStore.saveCheckpoint(
+                    checkpointDir,
+                    TranscriptionCheckpoint(
+                        jobId = jobId,
+                        title = tentativeTitle,
+                        completedItems = completed,
+                        totalItems = total,
+                        totalWindows = totalWindows,
+                        totalLines = totalLines,
+                        matchedOfficialAvatars = matchedOfficialAvatars,
+                        matchedVisualAssets = matchedVisualAssets,
+                        elapsedMs = totalElapsedSoFar,
+                        customCounter = customCounter,
+                        imageCounter = imageCounter,
+                        customKeyToId = customKeyToId.toMap(),
+                        tempChars = tempChars.toMap(),
+                        tempImageIds = tempImages.keys.toList(),
+                        branchInputs = branchInputs.map { CheckpointBranchInput(it.rawLabel, it.messages) },
+                        combinedMomoScript = scriptBuilder.toString(),
+                        previewPages = previewPages.toList(),
+                        updatedAtMs = System.currentTimeMillis(),
+                    ),
+                )
+            }
             val cb = onPageCompleted ?: return
             pagesSinceMoeJsonFlush++
             // Flush MoeTalk JSON every page when fast (<250ms), or every 3 pages if large base64 payload
@@ -180,7 +239,7 @@ object BatchTranscriptionPipeline {
                     totalLines = totalLines,
                     matchedOfficialAvatars = matchedOfficialAvatars,
                     matchedVisualAssets = matchedVisualAssets,
-                    elapsedMs = (System.nanoTime() - t0) / 1_000_000L,
+                    elapsedMs = totalElapsedSoFar,
                     combinedMomoScript = scriptBuilder.toString(),
                     moetalkArchiveJson = jsonStr,
                     usedBranchPacking = usedBranches,
@@ -213,6 +272,7 @@ object BatchTranscriptionPipeline {
             if (rgb != null && cropBox != null) {
                 encodeCropWebpDataUrl(rgb, imgW, imgH, cropBox, square = true, maxSide = 300)?.let { url ->
                     tempImages[cid] = url
+                    checkpointDir?.let { CheckpointStore.saveTempImage(it, cid, url) }
                 }
             }
             return cid to cid
@@ -223,6 +283,7 @@ object BatchTranscriptionPipeline {
             imageCounter++
             val id = "Image-%04d".format(imageCounter)
             tempImages[id] = url
+            checkpointDir?.let { CheckpointStore.saveTempImage(it, id, url) }
             return id
         }
 
@@ -529,7 +590,8 @@ object BatchTranscriptionPipeline {
         val archiveTitle: String = when (input) {
             is BatchInputSummary.Images -> {
                 val total = input.items.size
-                for ((idx, item) in input.items.withIndex()) {
+                for (idx in startIndex.coerceIn(0, total) until total) {
+                    val item = input.items[idx]
                     currentCoroutineContext().ensureActive()
                     val tPage0 = System.nanoTime()
                     val label = item.displayName.substringBeforeLast('.').ifBlank { (idx + 1).toString() }
@@ -618,7 +680,7 @@ object BatchTranscriptionPipeline {
                     val total = doc.numberOfPages
                     var pdfRenderer: PdfRenderer? = null
                     try {
-                        for (pageIndex in 0 until total) {
+                        for (pageIndex in startIndex.coerceIn(0, total) until total) {
                             currentCoroutineContext().ensureActive()
                             val tPage0 = System.nanoTime()
                             val pageNo = pageIndex + 1
@@ -783,7 +845,7 @@ object BatchTranscriptionPipeline {
         }
 
         val usedBranches = packMode == MoeTalkBranchPacker.MultiItemPackMode.BRANCH_PER_ITEM && branchInputs.size > 1
-        val elapsedMs = (System.nanoTime() - t0) / 1_000_000L
+        val elapsedMs = priorElapsedMs + (System.nanoTime() - t0) / 1_000_000L
 
         return BatchTranscriptionOutput(
             title = archiveTitle,

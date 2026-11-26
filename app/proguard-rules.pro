@@ -55,6 +55,8 @@
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
 -keep,includedescriptorclasses class dev.momotranscript.app.work.TranscriptionJobSpec { *; }
+-keep,includedescriptorclasses class dev.momotranscript.app.work.TranscriptionCheckpoint { *; }
+-keep,includedescriptorclasses class dev.momotranscript.app.work.CheckpointBranchInput { *; }
 -keep,includedescriptorclasses class dev.momotranscript.app.ui.PagePreviewRecord { *; }
 -keep,includedescriptorclasses class dev.momotranscript.app.avatar.AvatarCatalog { *; }
 -keep,includedescriptorclasses class dev.momotranscript.app.avatar.CatalogChar { *; }

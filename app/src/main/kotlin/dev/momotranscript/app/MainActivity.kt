@@ -9,7 +9,9 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -119,8 +121,11 @@ import dev.momotranscript.app.model.ModelScopeDownloader
 import dev.momotranscript.app.nativecore.NativeCore
 import dev.momotranscript.app.ui.DetectionOverlayViewer
 import dev.momotranscript.app.ui.ModelsTab
+import dev.momotranscript.app.ui.MomoScriptViewer
 import dev.momotranscript.app.ui.PagePreviewRecord
 import dev.momotranscript.app.ui.theme.MomoTranScriptTheme
+import dev.momotranscript.app.work.CheckpointStore
+import dev.momotranscript.app.work.ResumableJobInfo
 import dev.momotranscript.app.work.TranscriptionJobSpec
 import dev.momotranscript.app.work.TranscriptionWorker
 import kotlinx.coroutines.CancellationException
@@ -353,6 +358,26 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
     var selectedBackendMode by remember { mutableIntStateOf(loadBackendMode(context)) }
 
     var isJobRunning by remember { mutableStateOf(false) }
+    var activeJobId by remember { mutableStateOf<String?>(null) }
+    var resumableJob by remember { mutableStateOf<ResumableJobInfo?>(null) }
+    var isIgnoringBatteryOpt by remember {
+        mutableStateOf(
+            runCatching {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                pm.isIgnoringBatteryOptimizations(context.packageName)
+            }.getOrDefault(true),
+        )
+    }
+    val jobsRoot = remember { File(context.filesDir, "jobs") }
+    fun refreshResumableJob() {
+        resumableJob = CheckpointStore.findLatestResumable(jobsRoot)
+    }
+    fun refreshBatteryOptState() {
+        isIgnoringBatteryOpt = runCatching {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            pm.isIgnoringBatteryOptimizations(context.packageName)
+        }.getOrDefault(true)
+    }
     var batchProgress by remember { mutableStateOf<BatchProgress?>(null) }
     var lastCompleted by remember { mutableStateOf<CompletedJobSummary?>(null) }
     var previewPages by remember { mutableStateOf<List<PagePreviewRecord>>(emptyList()) }
@@ -369,7 +394,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
     var scriptText by remember {
         mutableStateOf(
             "- 转录完成后的 MomoScript 正文会显示在这里\n" +
-                "> 提示: 支持直接编辑、一键复制、导出 .txt 或导入 MoeTalk 的分支 .json 存档。",
+                "> 提示: 支持高亮阅读、多页分页、单页源码编辑、一键复制、导出 .txt 或导入 MoeTalk 的分支 .json 存档。",
         )
     }
 
@@ -379,6 +404,45 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
         if (!f.isFile) return ""
         val text = runCatching { f.readText(Charsets.UTF_8) }.getOrDefault("")
         return if (text.length > maxChars) "… (前略)\n" + text.takeLast(maxChars) else text
+    }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { refreshResumableJob() }
+        // If there is an unfinished checkpoint on cold start, pre-load its partial result for immediate preview
+        val res = resumableJob
+        if (res != null && lastCompleted == null) {
+            val cp = res.checkpoint
+            val txtFile = File(res.jobDir, "result.txt")
+            val jsonFile = File(res.jobDir, "result.moetalk.json")
+            val logFile = File(res.jobDir, "run.log")
+            val loadedTxt = withContext(Dispatchers.IO) {
+                txtFile.takeIf { it.isFile }?.readText(Charsets.UTF_8) ?: cp.combinedMomoScript
+            }
+            if (loadedTxt.isNotBlank()) {
+                scriptText = loadedTxt
+            }
+            if (cp.previewPages.isNotEmpty()) {
+                previewPages = cp.previewPages
+            }
+            if (logFile.isFile) {
+                activeLogPath = logFile.absolutePath
+                liveLogText = withContext(Dispatchers.IO) { readLogTail(logFile.absolutePath) }
+            }
+            lastCompleted = CompletedJobSummary(
+                title = cp.title,
+                txtPath = txtFile.absolutePath,
+                jsonPath = jsonFile.absolutePath,
+                itemCount = cp.completedItems,
+                totalItems = cp.totalItems,
+                isPartial = true,
+                windowCount = cp.totalWindows,
+                lineCount = cp.totalLines,
+                matchedAvatars = cp.matchedOfficialAvatars,
+                matchedVisuals = cp.matchedVisualAssets,
+                elapsedMs = cp.elapsedMs,
+                usedBranches = res.spec.useBranches && cp.totalItems > 1,
+            )
+        }
     }
 
     var coreVersion by remember { mutableStateOf(NativeCore.coreVersion()) }
@@ -423,6 +487,10 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                     isJobRunning = true
                     runError = null
                     val p = info.progress
+                    val progJobId = p.getString(TranscriptionWorker.KEY_JOB_ID)
+                    if (!progJobId.isNullOrBlank()) {
+                        activeJobId = progJobId
+                    }
                     val done = p.getInt(TranscriptionWorker.KEY_DONE, 0)
                     val total = p.getInt(TranscriptionWorker.KEY_TOTAL, 0)
                     batchProgress = BatchProgress(
@@ -495,6 +563,8 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                 }
                 WorkInfo.State.SUCCEEDED -> {
                     isJobRunning = false
+                    activeJobId = null
+                    resumableJob = null
                     if (lastCompletedWorkId != info.id) {
                         lastCompletedWorkId = info.id
                         val out = info.outputData
@@ -555,6 +625,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                 }
                 WorkInfo.State.FAILED -> {
                     isJobRunning = false
+                    withContext(Dispatchers.IO) { refreshResumableJob() }
                     val errLog = info.outputData.getString(TranscriptionWorker.KEY_LOG_PATH)
                     if (!errLog.isNullOrBlank()) {
                         activeLogPath = errLog
@@ -564,15 +635,21 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                 }
                 WorkInfo.State.CANCELLED -> {
                     isJobRunning = false
+                    withContext(Dispatchers.IO) { refreshResumableJob() }
                     activeLogPath?.let { lp ->
                         liveLogText = withContext(Dispatchers.IO) { readLogTail(lp) }
                     }
-                    val partialDone = lastCompleted?.itemCount ?: 0
-                    val partialTotal = lastCompleted?.totalItems ?: 0
-                    runError = if (partialDone > 0) {
-                        "已手动停止（已保留前 $partialDone/$partialTotal 页成果，可直接前往「结果」页预览或导出）"
+                    val res = resumableJob
+                    runError = if (res != null && res.wasPausedByUser) {
+                        null // Cleanly shown by the dedicated Resume card instead of an error banner
                     } else {
-                        "已手动停止转录任务"
+                        val partialDone = lastCompleted?.itemCount ?: res?.checkpoint?.completedItems ?: 0
+                        val partialTotal = lastCompleted?.totalItems ?: res?.checkpoint?.totalItems ?: 0
+                        if (partialDone > 0) {
+                            "任务已暂停/中断（已保存前 $partialDone/$partialTotal 页断点，可随时继续或前往「结果」页预览导出）"
+                        } else {
+                            "已停止转录任务"
+                        }
                     }
                 }
                 else -> Unit
@@ -895,6 +972,29 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                     },
                     isJobRunning = isJobRunning,
                     batchProgress = batchProgress,
+                    resumableJob = resumableJob,
+                    isIgnoringBatteryOpt = isIgnoringBatteryOpt,
+                    onOpenBatterySettings = {
+                        val intent = runCatching {
+                            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        }.getOrElse {
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", context.packageName, null),
+                            )
+                        }
+                        runCatching { context.startActivity(intent) }.onFailure {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                        Uri.fromParts("package", context.packageName, null),
+                                    ),
+                                )
+                            }
+                        }
+                        refreshBatteryOptState()
+                    },
                     liveCompletedCount = lastCompleted?.itemCount ?: 0,
                     liveProfileSummary = liveProfileSummary,
                     liveLogText = liveLogText,
@@ -961,6 +1061,8 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                             )
                         }
                         runError = null
+                        activeJobId = jobId
+                        resumableJob = null
                         lastObservedFlushSeq = -1
                         lastObservedLogSeq = -1
                         liveLogText = ""
@@ -976,7 +1078,46 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                             req,
                         )
                     },
+                    onPauseTranscription = {
+                        val jid = activeJobId
+                        if (!jid.isNullOrBlank()) {
+                            CheckpointStore.markPaused(File(jobsRoot, jid))
+                        }
+                        workManager.cancelUniqueWork(TranscriptionWorker.UNIQUE_WORK_NAME)
+                        Toast.makeText(context, "正在暂停并保存当前页断点…", Toast.LENGTH_SHORT).show()
+                    },
+                    onResumeTranscription = { res ->
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                            != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        CheckpointStore.clearPaused(res.jobDir)
+                        activeJobId = res.spec.jobId
+                        resumableJob = null
+                        runError = null
+                        lastObservedFlushSeq = -1
+                        lastObservedLogSeq = -1
+                        val req = TranscriptionWorker.buildResumeRequest(res.specFile)
+                        workManager.enqueueUniqueWork(
+                            TranscriptionWorker.UNIQUE_WORK_NAME,
+                            ExistingWorkPolicy.REPLACE,
+                            req,
+                        )
+                    },
+                    onDiscardResumable = { res ->
+                        scope.launch {
+                            withContext(Dispatchers.IO) { CheckpointStore.deleteJob(res.jobDir) }
+                            resumableJob = null
+                            Toast.makeText(context, "已清理暂停任务的断点缓存", Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     onStopTranscription = {
+                        val jid = activeJobId
+                        if (!jid.isNullOrBlank()) {
+                            CheckpointStore.clearPaused(File(jobsRoot, jid))
+                        }
                         workManager.cancelUniqueWork(TranscriptionWorker.UNIQUE_WORK_NAME)
                     },
                 )
@@ -1099,6 +1240,9 @@ private fun TranscribeTab(
     onSelectBackendMode: (Int) -> Unit,
     isJobRunning: Boolean,
     batchProgress: BatchProgress?,
+    resumableJob: ResumableJobInfo?,
+    isIgnoringBatteryOpt: Boolean,
+    onOpenBatterySettings: () -> Unit,
     liveCompletedCount: Int,
     liveProfileSummary: String,
     liveLogText: String,
@@ -1112,6 +1256,9 @@ private fun TranscribeTab(
     onCopyLog: () -> Unit,
     onExportLog: () -> Unit,
     onStartTranscription: () -> Unit,
+    onPauseTranscription: () -> Unit,
+    onResumeTranscription: (ResumableJobInfo) -> Unit,
+    onDiscardResumable: (ResumableJobInfo) -> Unit,
     onStopTranscription: () -> Unit,
 ) {
     var expandLogs by remember { mutableStateOf(true) }
@@ -1298,7 +1445,7 @@ private fun TranscribeTab(
                     icon = Icons.Rounded.Face,
                     title = "视觉头像与差分匹配",
                     subtitle = if (visualPackReady) "外部视觉扩展包已就绪，自动匹配对应头像与差分索引"
-                    else "未下载外部视觉扩展包（可选 +53 MB）",
+                    else "未下载外部视觉扩展包（可选 +32 MiB）",
                     checked = useCcipVisualMatch && visualPackReady,
                     enabled = !isJobRunning && visualPackReady,
                     onCheckedChange = onToggleCcip,
@@ -1349,6 +1496,114 @@ private fun TranscribeTab(
                                 Text(label, maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium)
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // 3b. Resumable paused / interrupted job checkpoint card
+        if (!isJobRunning && resumableJob != null) {
+            val cp = resumableJob.checkpoint
+            val frac = if (cp.totalItems > 0) (cp.completedItems.toFloat() / cp.totalItems).coerceIn(0f, 1f) else 0f
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)),
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (resumableJob.wasPausedByUser) {
+                                "已暂停任务 · ${cp.title}"
+                            } else {
+                                "检测到未完成断点 · ${cp.title}"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = "${cp.completedItems}/${cp.totalItems}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    LinearProgressIndicator(progress = { frac }, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        text = "已完成 ${cp.completedItems}/${cp.totalItems} 页（${cp.totalLines} 行），可从第 ${cp.completedItems + 1} 页无缝继续，或直接预览已产出结果。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = { onResumeTranscription(resumableJob) },
+                            modifier = Modifier.weight(1.3f),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                        ) {
+                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("继续第 ${cp.completedItems + 1} 页", maxLines = 1, softWrap = false)
+                        }
+                        FilledTonalButton(
+                            onClick = onPreviewPartialResult,
+                            modifier = Modifier.weight(0.9f),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        ) {
+                            Text("预览", maxLines = 1, softWrap = false)
+                        }
+                        OutlinedButton(
+                            onClick = { onDiscardResumable(resumableJob) },
+                            modifier = Modifier.weight(0.75f),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        ) {
+                            Text("放弃", maxLines = 1, softWrap = false)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3c. Gentle battery optimization hint for long background GPU jobs (OriginOS/HyperOS/ColorOS)
+        if (!isIgnoringBatteryOpt) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "后台长任务防冻结：建议在系统电池设置中设为「允许后台高耗电 / 无限制」",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    FilledTonalButton(
+                        onClick = onOpenBatterySettings,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text("去设置", style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -1533,21 +1788,39 @@ private fun TranscribeTab(
             ) {
                 Icon(Icons.Rounded.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("前往下载基础模型包（约 43 MiB）", fontWeight = FontWeight.SemiBold)
+                Text("前往下载基础模型包（约 38 MiB）", fontWeight = FontWeight.SemiBold)
             }
         } else if (isJobRunning) {
-            OutlinedButton(
-                onClick = onStopTranscription,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Icon(Icons.Rounded.Close, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("停止转录任务", fontWeight = FontWeight.SemiBold)
+                FilledTonalButton(
+                    onClick = onPauseTranscription,
+                    modifier = Modifier
+                        .weight(1.15f)
+                        .height(52.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Rounded.Menu, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("暂停（存断点）", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                }
+                OutlinedButton(
+                    onClick = onStopTranscription,
+                    modifier = Modifier
+                        .weight(0.85f)
+                        .height(52.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Rounded.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("停止任务", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                }
             }
         } else {
             Button(
@@ -1709,14 +1982,12 @@ private fun ResultTab(
                 }
             }
 
-            OutlinedTextField(
-                value = scriptText,
-                onValueChange = onScriptChange,
+            MomoScriptViewer(
+                scriptText = scriptText,
+                onScriptChange = onScriptChange,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                shape = RoundedCornerShape(18.dp),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
             )
         } else {
             DetectionOverlayViewer(

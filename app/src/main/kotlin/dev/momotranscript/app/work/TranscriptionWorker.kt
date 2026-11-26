@@ -1,12 +1,16 @@
 package dev.momotranscript.app.work
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Debug
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
@@ -17,6 +21,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import dev.momotranscript.app.BuildConfig
+import dev.momotranscript.app.MainActivity
 import dev.momotranscript.app.R
 import dev.momotranscript.app.avatar.OnnxAvatarMatcher
 import dev.momotranscript.app.engine.BatchTranscriptionPipeline
@@ -88,6 +93,11 @@ class TranscriptionWorker(
         val logFile = File(outDir, "run.log")
         val previewCacheDir = File(outDir, "previews")
 
+        CheckpointStore.clearPaused(outDir)
+        val resumeCheckpoint = CheckpointStore.loadCheckpoint(outDir)
+        val initialDone = resumeCheckpoint?.completedItems ?: 0
+        val initialTotal = (resumeCheckpoint?.totalItems ?: spec.uris.size).coerceAtLeast(1)
+
         val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
         var logSeq = 0
         var flushSeq = 0
@@ -119,6 +129,7 @@ class TranscriptionWorker(
             val snap = latestSnap
             setProgressAsync(
                 workDataOf(
+                    KEY_JOB_ID to spec.jobId,
                     KEY_DONE to done,
                     KEY_TOTAL to total,
                     KEY_LABEL to label,
@@ -132,33 +143,53 @@ class TranscriptionWorker(
                     KEY_LOG_SEQ to logSeq,
                     KEY_PROFILE_SUMMARY to profileSummary,
                     KEY_ITEM_COUNT to (snap?.completedItems ?: done),
-                    KEY_WINDOW_COUNT to (snap?.totalWindows ?: 0),
-                    KEY_LINE_COUNT to (snap?.totalLines ?: 0),
-                    KEY_MATCHED_AVATARS to (snap?.matchedOfficialAvatars ?: 0),
-                    KEY_MATCHED_VISUALS to (snap?.matchedVisualAssets ?: 0),
-                    KEY_ELAPSED_MS to (snap?.elapsedMs ?: 0L),
+                    KEY_WINDOW_COUNT to (snap?.totalWindows ?: resumeCheckpoint?.totalWindows ?: 0),
+                    KEY_LINE_COUNT to (snap?.totalLines ?: resumeCheckpoint?.totalLines ?: 0),
+                    KEY_MATCHED_AVATARS to (snap?.matchedOfficialAvatars ?: resumeCheckpoint?.matchedOfficialAvatars ?: 0),
+                    KEY_MATCHED_VISUALS to (snap?.matchedVisualAssets ?: resumeCheckpoint?.matchedVisualAssets ?: 0),
+                    KEY_ELAPSED_MS to (snap?.elapsedMs ?: resumeCheckpoint?.elapsedMs ?: 0L),
                     KEY_USED_BRANCHES to (snap?.usedBranchPacking ?: spec.useBranches),
                 ),
             )
         }
 
         ensureNotificationChannel()
-        runCatching {
-            setForeground(createForegroundInfo(0, spec.uris.size.coerceAtLeast(1), spec.title, "正在初始化模型…"))
+        val notifManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val startStatusText = if (initialDone > 0) {
+            "从第 ${initialDone + 1}/$initialTotal 页恢复转录…"
+        } else {
+            "正在初始化模型…"
+        }
+        val fgResult = runCatching {
+            setForeground(createForegroundInfo(initialDone, initialTotal, spec.title, startStatusText))
         }
 
+        val pm = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = runCatching {
+            pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MomoTranScript:TranscribeJob").apply {
+                setReferenceCounted(false)
+                acquire(4L * 3600_000L)
+            }
+        }.getOrNull()
+
         appendLog(
-            "=== MomoTranScript v${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE}) | job=${spec.jobId} ===",
+            "=== MomoTranScript v${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE}) | job=${spec.jobId}" +
+                (if (initialDone > 0) " [RESUME $initialDone/$initialTotal]" else "") + " ===",
         )
         appendLog(
             "设备: ${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) | " +
                 "ABI=${Build.SUPPORTED_ABIS.firstOrNull() ?: "?"} | CPU=${Runtime.getRuntime().availableProcessors()}核 | ${currentMemMb()}",
         )
+        val ignoringOpt = runCatching { pm.isIgnoringBatteryOptimizations(applicationContext.packageName) }.getOrDefault(false)
+        appendLog(
+            "前台保活: FGS=${if (fgResult.isSuccess) "OK" else "FAIL(${fgResult.exceptionOrNull()?.javaClass?.simpleName}: ${fgResult.exceptionOrNull()?.message})"} " +
+                "| WakeLock=${if (wakeLock?.isHeld == true) "ON" else "OFF"} | 电池白名单=${if (ignoringOpt) "已放行" else "受系统管控"}",
+        )
         appendLog("硬件探针: ${NativeCore.mnnDeviceInfo()}")
         appendLog(
             "任务: kind=${spec.kind} title=${spec.title} branches=${spec.useBranches} ccip=${spec.useCcipVisual} backendMode=${spec.backendMode}",
         )
-        pushProgress(0, spec.uris.size.coerceAtLeast(1), "初始化", "正在加载端侧 MNN 模型…")
+        pushProgress(initialDone, initialTotal, if (initialDone > 0) "断点恢复" else "初始化", startStatusText)
 
         val inputSummary: BatchInputSummary = when (spec.kind) {
             "pdf" -> BatchInputSummary.PdfDocument(
@@ -244,6 +275,9 @@ class TranscriptionWorker(
                         avatarMatcher = matcher,
                         packMode = packMode,
                         previewCacheDir = previewCacheDir,
+                        checkpointDir = outDir,
+                        jobId = spec.jobId,
+                        resumeCheckpoint = resumeCheckpoint,
                         onLog = { msg ->
                             appendLog("$msg | ${currentMemMb()}")
                         },
@@ -316,7 +350,7 @@ class TranscriptionWorker(
                         },
                     ) { prog ->
                         val now = System.currentTimeMillis()
-                        if (now - lastNotifMs >= 400L || prog.completedItems == prog.totalItems) {
+                        if (now - lastNotifMs >= 500L || prog.completedItems == prog.totalItems) {
                             lastNotifMs = now
                             pushProgress(
                                 done = prog.completedItems,
@@ -324,9 +358,12 @@ class TranscriptionWorker(
                                 label = prog.currentLabel,
                                 detail = prog.detail,
                             )
+                            // Update the active foreground notification directly via NotificationManager
+                            // (never re-call setForegroundAsync in background on Android 12-16!)
                             runCatching {
-                                setForegroundAsync(
-                                    createForegroundInfo(
+                                notifManager.notify(
+                                    NOTIFICATION_ID,
+                                    buildNotification(
                                         prog.completedItems,
                                         prog.totalItems.coerceAtLeast(1),
                                         spec.title,
@@ -347,6 +384,7 @@ class TranscriptionWorker(
                 previewFile,
                 Json.encodeToString(ListSerializer(PagePreviewRecord.serializer()), output.previewPages),
             )
+            CheckpointStore.markCompleted(outDir)
             flushSeq++
             appendLog(
                 "=== 全部完成: ${output.itemCount} 页 / ${output.totalWindows} 窗 / ${output.totalLines} 行 / " +
@@ -355,6 +393,7 @@ class TranscriptionWorker(
 
             Result.success(
                 workDataOf(
+                    KEY_JOB_ID to spec.jobId,
                     KEY_TITLE to output.title,
                     KEY_TXT_PATH to txtFile.absolutePath,
                     KEY_JSON_PATH to jsonFile.absolutePath,
@@ -372,8 +411,10 @@ class TranscriptionWorker(
                 ),
             )
         } catch (ce: CancellationException) {
-            val doneCount = latestSnap?.completedItems ?: 0
-            appendLog("=== 任务被用户停止：已保留前 $doneCount 页结果 (${txtFile.name}) ===")
+            val doneCount = latestSnap?.completedItems ?: initialDone
+            val reasonStr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) "stopReason=$stopReason" else "cancelled"
+            val modeLabel = if (CheckpointStore.isPaused(outDir)) "已暂停" else "已中断($reasonStr)"
+            appendLog("=== 任务$modeLabel：已保存前 $doneCount 页断点，随时可继续 ===")
             throw ce
         } catch (e: Exception) {
             appendLog("!!! 运行异常: ${e.javaClass.simpleName}: ${e.message}")
@@ -384,7 +425,16 @@ class TranscriptionWorker(
                     KEY_PROFILE_SUMMARY to profileSummary,
                 ),
             )
+        } finally {
+            runCatching {
+                if (wakeLock?.isHeld == true) wakeLock.release()
+            }
         }
+    }
+
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        ensureNotificationChannel()
+        return createForegroundInfo(0, 1, "MomoTranScript", "正在离线转录…")
     }
 
     private fun atomicWriteText(target: File, content: String) {
@@ -429,16 +479,27 @@ class TranscriptionWorker(
         nm.createNotificationChannel(channel)
     }
 
-    private fun createForegroundInfo(done: Int, total: Int, title: String, detail: String): ForegroundInfo {
-        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+    private fun buildNotification(done: Int, total: Int, title: String, detail: String): Notification {
+        val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val contentIntent = PendingIntent.getActivity(applicationContext, 0, launchIntent, piFlags)
+        return NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_momotranscript)
             .setContentTitle("MomoTranScript · $title")
             .setContentText(detail)
+            .setContentIntent(contentIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setProgress(total, done.coerceIn(0, total), total <= 0)
             .build()
+    }
 
+    private fun createForegroundInfo(done: Int, total: Int, title: String, detail: String): ForegroundInfo {
+        val notification = buildNotification(done, total, title, detail)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -449,6 +510,7 @@ class TranscriptionWorker(
     companion object {
         private const val LOG_TAG = "MomoTranScript"
         const val UNIQUE_WORK_NAME = "mmt_transcription_job"
+        const val KEY_JOB_ID = "job_id"
         const val KEY_SPEC_FILE = "spec_file"
         const val KEY_DONE = "done"
         const val KEY_TOTAL = "total"
@@ -478,6 +540,13 @@ class TranscriptionWorker(
             val dir = File(context.filesDir, "jobs/${spec.jobId}").apply { mkdirs() }
             val specFile = File(dir, "spec.json")
             specFile.writeText(Json.encodeToString(TranscriptionJobSpec.serializer(), spec), Charsets.UTF_8)
+            val data: Data = workDataOf(KEY_SPEC_FILE to specFile.absolutePath)
+            return OneTimeWorkRequestBuilder<TranscriptionWorker>()
+                .setInputData(data)
+                .build()
+        }
+
+        fun buildResumeRequest(specFile: File): OneTimeWorkRequest {
             val data: Data = workDataOf(KEY_SPEC_FILE to specFile.absolutePath)
             return OneTimeWorkRequestBuilder<TranscriptionWorker>()
                 .setInputData(data)
