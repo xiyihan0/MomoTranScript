@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/xiyihan0/MomoTranScript/releases">GitHub Releases 下载</a> ·
-  <a href="https://modelscope.cn/models/xiyihan/momotranscript-models/resolve/master/releases/MomoTranScript-0.5.2-arm64-release.apk">国内高速镜像（ModelScope）</a> ·
+  <a href="https://modelscope.cn/models/xiyihan/momotranscript-models/resolve/master/releases/MomoTranScript-0.5.3-arm64-release.apk">国内高速镜像（ModelScope）</a> ·
   <a href="https://www.xiyihan.cn/momotranscript/">应用主页</a> ·
   <a href="https://www.xiyihan.cn/momotranscript/privacy.html">隐私政策</a>
 </p>

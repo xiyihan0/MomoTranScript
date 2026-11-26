@@ -298,6 +298,67 @@ void test_speaker_across_insert_image() {
     std::cout << "[PASS] test_speaker_across_insert_image\n";
 }
 
+void test_cv_lines_bubble_tail_and_rounded_corners() {
+    // Regression: dark blue bubble on white canvas with left speech tail and rounded corners.
+    // Exterior white pixels around the tail and corners must NOT leak into ink_box.
+    const int W = 320;
+    const int H = 120;
+    std::vector<uint8_t> rgb(static_cast<size_t>(W) * H * 3, 255);  // white page canvas
+
+    auto set_px = [&](int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+        if (x < 0 || x >= W || y < 0 || y >= H) return;
+        uint8_t* p = rgb.data() + (static_cast<size_t>(y) * W + x) * 3;
+        p[0] = r; p[1] = g; p[2] = b;
+    };
+
+    // Rounded dark bubble body: x=[40..280), y=[24..74), corner radius 8px
+    const int bx0 = 40, by0 = 24, bx1 = 280, by1 = 74, rad = 8;
+    for (int y = by0; y < by1; ++y) {
+        for (int x = bx0; x < bx1; ++x) {
+            int dx = 0, dy = 0;
+            if (x < bx0 + rad) dx = (bx0 + rad) - x;
+            else if (x >= bx1 - rad) dx = x - (bx1 - rad - 1);
+            if (y < by0 + rad) dy = (by0 + rad) - y;
+            else if (y >= by1 - rad) dy = y - (by1 - rad - 1);
+            if (dx * dx + dy * dy <= rad * rad) {
+                set_px(x, y, 76, 91, 112);  // MomoTalk dark slate-blue bubble
+            }
+        }
+    }
+    // Left speech bubble triangular tail: x=[30..41), y=[36..48) (height 12 < 0.5*50)
+    for (int y = 36; y < 48; ++y) {
+        int span = std::min(y - 36, 47 - y) + 1;
+        for (int x = bx0 - span * 2; x < bx0 + 1; ++x) {
+            set_px(x, y, 76, 91, 112);
+        }
+    }
+    // White text glyphs inside bubble: x=[56..256), y=[40..58)
+    for (int k = 0; k < 10; ++k) {
+        for (int y = 40; y < 58; ++y) {
+            for (int x = 56 + k * 20; x < 68 + k * 20; ++x) {
+                set_px(x, y, 250, 250, 250);
+            }
+        }
+    }
+
+    // Detector box tightly wrapping bubble + tail: [30, 24, 280, 74]
+    auto lines = mmt::segment_physical_lines(rgb.data(), W, H, mmt::BoxI{30, 24, 280, 74}, false);
+    assert(lines.size() == 1);
+    assert(lines[0].is_light_fg);
+    // Must cleanly exclude both the left white area around tail (x=30..40) and right rounded corners (x=272..280)
+    assert(lines[0].ink_box.x0 == 56);
+    assert(lines[0].ink_box.x1 == 248);
+    assert(lines[0].ink_box.y0 == 40);
+    assert(lines[0].ink_box.y1 == 58);
+
+    // Also test a follow-up bubble WITHOUT tail and tight detector box [40, 24, 280, 74]
+    auto lines_notail = mmt::segment_physical_lines(rgb.data(), W, H, mmt::BoxI{40, 24, 280, 74}, false);
+    assert(lines_notail.size() == 1);
+    assert(lines_notail[0].ink_box.x0 == 56);
+    assert(lines_notail[0].ink_box.x1 == 248);
+    std::cout << "[PASS] test_cv_lines_bubble_tail_and_rounded_corners\n";
+}
+
 }  // namespace
 
 int main() {
@@ -308,5 +369,6 @@ int main() {
     test_momoscript_assembly();
     test_visual_match_ccip_and_stage2();
     test_speaker_across_insert_image();
+    test_cv_lines_bubble_tail_and_rounded_corners();
     return 0;
 }
