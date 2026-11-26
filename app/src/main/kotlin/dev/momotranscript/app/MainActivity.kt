@@ -14,6 +14,7 @@ import android.provider.DocumentsContract
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -23,6 +24,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -337,6 +339,10 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
 
     var currentTab by remember { mutableIntStateOf(0) } // 0=转录, 1=结果, 2=模型
     var hasUnreadResult by remember { mutableStateOf(false) }
+    var isResultExpanded by remember { mutableStateOf(false) }
+    BackHandler(enabled = currentTab == 1 && isResultExpanded) {
+        isResultExpanded = false
+    }
 
     var packStatuses by remember { mutableStateOf(ModelPackCatalog.inspectInstalled(bundleRoot)) }
     val corePackReady = packStatuses.filter { it.spec.required }.all { it.isReady }
@@ -835,8 +841,10 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
         }
     }
 
+    val immersiveResult = currentTab == 1 && isResultExpanded
     Scaffold(
         topBar = {
+            if (!immersiveResult) {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
@@ -907,8 +915,10 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                     }
                 },
             )
+            }
         },
         bottomBar = {
+            if (!immersiveResult) {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 tonalElevation = 0.dp,
@@ -946,6 +956,7 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                     },
                     label = { Text("模型") },
                 )
+            }
             }
         },
     ) { innerPadding ->
@@ -1163,6 +1174,8 @@ private fun MomoTranScriptApp(incomingPayload: IncomingPayload?) {
                         val base = (lastCompleted?.title ?: "moetalk_archive").replace(Regex("[\\\\/:*?\"<>|]"), "_")
                         exportMoeTalkLauncher.launch("$base$suffix.json")
                     },
+                    isExpanded = isResultExpanded,
+                    onToggleExpand = { isResultExpanded = !isResultExpanded },
                 )
 
                 else -> ModelsTab(
@@ -1854,47 +1867,66 @@ private fun ResultTab(
     onCopy: () -> Unit,
     onExportTxt: () -> Unit,
     onExportMoeTalk: () -> Unit,
+    isExpanded: Boolean = false,
+    onToggleExpand: () -> Unit = {},
 ) {
     var resultMode by remember { mutableIntStateOf(0) } // 0=正文编辑, 1=打框对照
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(
+                horizontal = if (isExpanded) 8.dp else 12.dp,
+                vertical = if (isExpanded) 6.dp else 6.dp,
+            ),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            SegmentedButton(
-                selected = resultMode == 0,
-                onClick = { resultMode = 0 },
-                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                icon = { Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(16.dp)) },
+        if (!isExpanded || resultMode != 0) {
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp),
             ) {
-                Text("正文编辑")
-            }
-            SegmentedButton(
-                selected = resultMode == 1,
-                onClick = { resultMode = 1 },
-                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                icon = { Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(16.dp)) },
-            ) {
-                val boxCount = previewPages.sumOf { it.elements.size }
-                Text(if (boxCount > 0) "打框对照 ($boxCount)" else "打框对照")
+                SegmentedButton(
+                    selected = resultMode == 0,
+                    onClick = { resultMode = 0 },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = { Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                ) {
+                    Text("正文编辑", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
+                }
+                SegmentedButton(
+                    selected = resultMode == 1,
+                    onClick = {
+                        resultMode = 1
+                        if (isExpanded) onToggleExpand()
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = { Icon(Icons.Rounded.Search, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                ) {
+                    val boxCount = previewPages.sumOf { it.elements.size }
+                    Text(
+                        if (boxCount > 0) "打框对照 ($boxCount)" else "打框对照",
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
             }
         }
 
-        if (isJobRunning || lastCompleted?.isPartial == true) {
+        if (!isExpanded && (isJobRunning || lastCompleted?.isPartial == true)) {
             val done = lastCompleted?.itemCount ?: 0
             val total = lastCompleted?.totalItems ?: 0
             Surface(
                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
@@ -1905,80 +1937,95 @@ private fun ResultTab(
                         } else {
                             "部分完成 · 已保留前 $done/$total 页，可直接预览或导出"
                         },
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier.weight(1f),
                     )
                     if (hasPendingNewerText) {
                         FilledTonalButton(
                             onClick = onSyncLatestText,
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(28.dp),
                         ) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("同步最新", maxLines = 1, softWrap = false)
+                            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text("同步最新", style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
                         }
                     }
                 }
             }
         }
 
-        lastCompleted?.let { out ->
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                val countLabel = if (out.isPartial && out.totalItems > out.itemCount) {
-                    "${out.itemCount}/${out.totalItems} 页 · ${out.lineCount} 行"
-                } else {
-                    "${out.itemCount} 项 · ${out.lineCount} 行"
-                }
-                StatChip(countLabel)
-                StatChip("${"%.1f".format(out.elapsedMs / 1000.0)}s")
-                StatChip(if (out.usedBranches) "MoeTalk 分支打包" else "单流合并")
-                if (out.matchedAvatars > 0 || out.matchedVisuals > 0) {
-                    StatChip("头像 ${out.matchedAvatars} · 差分 ${out.matchedVisuals}")
+        if (!isExpanded) {
+            lastCompleted?.let { out ->
+                // Single-line horizontally scrollable stat strip so stats never wrap into 2+ rows
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val countLabel = if (out.isPartial && out.totalItems > out.itemCount) {
+                        "${out.itemCount}/${out.totalItems} 页 · ${out.lineCount} 行"
+                    } else {
+                        "${out.itemCount} 项 · ${out.lineCount} 行"
+                    }
+                    StatChip(countLabel)
+                    StatChip("${"%.1f".format(out.elapsedMs / 1000.0)}s")
+                    if (out.matchedAvatars > 0 || out.matchedVisuals > 0) {
+                        StatChip("头像 ${out.matchedAvatars} · 差分 ${out.matchedVisuals}")
+                    }
+                    StatChip(if (out.usedBranches) "MoeTalk 分支" else "单流合并")
                 }
             }
         }
 
         if (resultMode == 0) {
-            val compactPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = onCopy,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = compactPadding,
+            if (!isExpanded) {
+                val compactPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("复制", maxLines = 1, softWrap = false)
-                }
-                OutlinedButton(
-                    onClick = onExportTxt,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = compactPadding,
-                ) {
-                    Icon(Icons.Rounded.Info, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("导出 .txt", maxLines = 1, softWrap = false)
-                }
-                Button(
-                    onClick = onExportMoeTalk,
-                    enabled = lastCompleted != null,
-                    modifier = Modifier.weight(1.25f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = compactPadding,
-                ) {
-                    Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("MoeTalk", maxLines = 1, softWrap = false)
+                    OutlinedButton(
+                        onClick = onCopy,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = compactPadding,
+                    ) {
+                        Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("复制", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
+                    }
+                    OutlinedButton(
+                        onClick = onExportTxt,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = compactPadding,
+                    ) {
+                        Icon(Icons.Rounded.Info, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("导出 .txt", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
+                    }
+                    Button(
+                        onClick = onExportMoeTalk,
+                        enabled = lastCompleted != null,
+                        modifier = Modifier
+                            .weight(1.2f)
+                            .height(34.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = compactPadding,
+                    ) {
+                        Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("MoeTalk", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
+                    }
                 }
             }
 
@@ -1988,6 +2035,8 @@ private fun ResultTab(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
+                isExpanded = isExpanded,
+                onToggleExpand = onToggleExpand,
             )
         } else {
             DetectionOverlayViewer(

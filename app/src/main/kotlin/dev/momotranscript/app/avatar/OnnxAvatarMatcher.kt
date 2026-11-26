@@ -545,6 +545,7 @@ class OnnxAvatarMatcher(
             )
 
             var bestCf: CfCandidate? = null
+            var bestMoetalkCf: CfCandidate? = null
             val sSimsRaw = repSkinSims[repSlot]
             if (sSimsRaw.isNotEmpty()) {
                 val ctxCanons = gallery.resolveSpeakerCanons(contextSpeakers.getOrNull(origI))
@@ -570,24 +571,40 @@ class OnnxAvatarMatcher(
                                 decoded.stackRgb, decoded.count, decoded.tplSize, decoded.varWeights,
                             )
                             stage2Ns += System.nanoTime() - tSt2
-                            if (st2.structZncc < CHARFACE_STRUCT_THRESHOLD || st2.diffZncc < CHARFACE_DIFF_THRESHOLD) {
+                            val minStruct = if (s1Raw >= HIGH_S1_RELAX_THRESHOLD) CHARFACE_RELAX_STRUCT else CHARFACE_STRUCT_THRESHOLD
+                            val minDiff = if (s1Raw >= HIGH_S1_RELAX_THRESHOLD) CHARFACE_RELAX_DIFF else CHARFACE_DIFF_THRESHOLD
+                            if (st2.structZncc < minStruct || st2.diffZncc < minDiff) {
                                 continue
                             }
                             val expr = sk.expressions.getOrElse(st2.bestIndex) { sk.expressions.firstOrNull() ?: continue }
                             val combo = 0.35f * s1Raw + 0.65f * st2.diffZncc
+                            val cand = CfCandidate(sk, expr, s1Raw, combo)
                             if (bestCf == null || combo > bestCf.combo) {
-                                bestCf = CfCandidate(sk, expr, s1Raw, combo)
+                                bestCf = cand
+                            }
+                            val hasMoetalkRef = expr.source == "moetalk:CharFace" ||
+                                (expr.packV2?.preset != null && expr.packV2.ordinal > 0 &&
+                                    gallery.packV2ToMoetalkExpr.containsKey(expr.packV2.preset to expr.packV2.ordinal))
+                            if (hasMoetalkRef && (bestMoetalkCf == null || combo > bestMoetalkCf.combo)) {
+                                bestMoetalkCf = cand
                             }
                         } else if (s1Raw >= CHARFACE_STAGE1_THRESHOLD + 0.06f) {
                             stage2Ns += System.nanoTime() - tSt2
                             // Graceful fallback if device lacks AV1 High-Profile MediaCodec
                             val expr = sk.expressions.firstOrNull() ?: continue
+                            val cand = CfCandidate(sk, expr, s1Raw, s1Raw)
                             if (bestCf == null || s1Raw > bestCf.combo) {
-                                bestCf = CfCandidate(sk, expr, s1Raw, s1Raw)
+                                bestCf = cand
+                            }
+                            if (expr.source == "moetalk:CharFace" && (bestMoetalkCf == null || s1Raw > bestMoetalkCf.combo)) {
+                                bestMoetalkCf = cand
                             }
                         }
                     }
                 }
+            }
+            if (bestMoetalkCf != null && (bestCf == null || bestMoetalkCf.combo >= bestCf.combo - 0.12f)) {
+                bestCf = bestMoetalkCf
             }
 
             val exprSum = repExprSummaries[repSlot]
@@ -717,10 +734,13 @@ class OnnxAvatarMatcher(
         private const val CHARFACE_STAGE1_THRESHOLD = 0.76f
         private const val CHARFACE_STRUCT_THRESHOLD = 0.58f
         private const val CHARFACE_DIFF_THRESHOLD = 0.45f
+        private const val HIGH_S1_RELAX_THRESHOLD = 0.82f
+        private const val CHARFACE_RELAX_STRUCT = 0.52f
+        private const val CHARFACE_RELAX_DIFF = 0.38f
         private const val EMOJI_STAGE1_THRESHOLD = 0.84f
         private const val EMOJI_STRUCT_THRESHOLD = 0.70f
         private const val CUSTOM_CLUSTER_THRESHOLD = 0.86f
-        private const val TOP_K_SKINS = 3
+        private const val TOP_K_SKINS = 5
 
         fun isAvailable(bundleRoot: File): Boolean {
             val unifiedMnn = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL)

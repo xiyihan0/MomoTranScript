@@ -68,39 +68,112 @@ void extract_crop_rgb(
 
 void trim_light_border_inplace(std::vector<uint8_t>& crop, int& w, int& h) {
     if (w < 16 || h < 16) return;
-    auto is_row_pad = [&](int y, int x0, int x1) -> bool {
+    const int max_border_y = std::max(4, static_cast<int>(std::lround(h * 0.06f)));
+    const int max_border_x = std::max(4, static_cast<int>(std::lround(w * 0.06f)));
+    auto is_row_pad = [&](int y, int x0, int x1, int depth) -> bool {
         int white_cnt = 0;
+        int neutral_cnt = 0;
+        double sum = 0.0, sum_sq = 0.0;
         int len = std::max(1, x1 - x0);
         const uint8_t* row = crop.data() + static_cast<size_t>(y) * w * 3;
         for (int x = x0; x < x1; ++x) {
-            uint8_t mn = std::min({row[x * 3], row[x * 3 + 1], row[x * 3 + 2]});
+            uint8_t r = row[x * 3], g = row[x * 3 + 1], b = row[x * 3 + 2];
+            uint8_t mn = std::min({r, g, b});
+            uint8_t mx = std::max({r, g, b});
             if (mn >= 242) white_cnt++;
+            if (mn >= 208 && (mx - mn) <= 14) neutral_cnt++;
+            sum += mn;
+            sum_sq += static_cast<double>(mn) * mn;
         }
-        return static_cast<float>(white_cnt) / static_cast<float>(len) >= 0.96f;
+        if (static_cast<float>(white_cnt) / static_cast<float>(len) >= 0.96f) return true;
+        if (depth < max_border_y && static_cast<float>(neutral_cnt) / static_cast<float>(len) >= 0.94f) {
+            double mean = sum / len;
+            double var = std::max(0.0, sum_sq / len - mean * mean);
+            return std::sqrt(var) < 18.0;
+        }
+        return false;
     };
-    auto is_col_pad = [&](int x, int y0, int y1) -> bool {
+    auto is_col_pad = [&](int x, int y0, int y1, int depth) -> bool {
         int white_cnt = 0;
+        int neutral_cnt = 0;
+        double sum = 0.0, sum_sq = 0.0;
         int len = std::max(1, y1 - y0);
         for (int y = y0; y < y1; ++y) {
             const uint8_t* p = crop.data() + (static_cast<size_t>(y) * w + x) * 3;
-            uint8_t mn = std::min({p[0], p[1], p[2]});
+            uint8_t r = p[0], g = p[1], b = p[2];
+            uint8_t mn = std::min({r, g, b});
+            uint8_t mx = std::max({r, g, b});
             if (mn >= 242) white_cnt++;
+            if (mn >= 208 && (mx - mn) <= 14) neutral_cnt++;
+            sum += mn;
+            sum_sq += static_cast<double>(mn) * mn;
         }
-        return static_cast<float>(white_cnt) / static_cast<float>(len) >= 0.96f;
+        if (static_cast<float>(white_cnt) / static_cast<float>(len) >= 0.96f) return true;
+        if (depth < max_border_x && static_cast<float>(neutral_cnt) / static_cast<float>(len) >= 0.94f) {
+            double mean = sum / len;
+            double var = std::max(0.0, sum_sq / len - mean * mean);
+            return std::sqrt(var) < 18.0;
+        }
+        return false;
     };
 
     int y0 = 0, y1 = h, x0 = 0, x1 = w;
-    while (y0 < y1 - 16 && is_row_pad(y0, x0, x1)) ++y0;
-    while (y1 > y0 + 16 && is_row_pad(y1 - 1, x0, x1)) --y1;
-    while (x0 < x1 - 16 && is_col_pad(x0, y0, y1)) ++x0;
-    while (x1 > x0 + 16 && is_col_pad(x1 - 1, y0, y1)) --x1;
+    while (y0 < y1 - 16 && is_row_pad(y0, x0, x1, y0)) ++y0;
+    while (y1 > y0 + 16 && is_row_pad(y1 - 1, x0, x1, h - y1)) --y1;
+    while (x0 < x1 - 16 && is_col_pad(x0, y0, y1, x0)) ++x0;
+    while (x1 > x0 + 16 && is_col_pad(x1 - 1, y0, y1, w - x1)) --x1;
 
     if (x0 == 0 && y0 == 0 && x1 == w && y1 == h) return;
-    int nw = x1 - x0;
-    int nh = y1 - y0;
+
+    // Match Python trim_asymmetric_padding: preserve natural symmetric white margins of normal
+    // white-bg CharFaces; only trim all 4 sides if a light card frame wraps a dark-bg portrait,
+    // or trim only the excess side on large asymmetric blank padding.
+    const int top_pad = y0;
+    const int bot_pad = h - y1;
+    const int left_pad = x0;
+    const int right_pad = w - x1;
+    const bool asym_x = std::abs(left_pad - right_pad) >= std::max(16, static_cast<int>(0.14f * w));
+    const bool asym_y = std::abs(top_pad - bot_pad) >= std::max(16, static_cast<int>(0.14f * h));
+
+    int dark_ring = 0;
+    int ring_total = 0;
+    for (int x = x0; x < x1; ++x) {
+        const uint8_t* pt = crop.data() + (static_cast<size_t>(y0) * w + x) * 3;
+        const uint8_t* pb = crop.data() + (static_cast<size_t>(y1 - 1) * w + x) * 3;
+        if (rgb_to_gray(pt[0], pt[1], pt[2]) < 48) dark_ring++;
+        if (rgb_to_gray(pb[0], pb[1], pb[2]) < 48) dark_ring++;
+        ring_total += 2;
+    }
+    for (int y = y0; y < y1; ++y) {
+        const uint8_t* pl = crop.data() + (static_cast<size_t>(y) * w + x0) * 3;
+        const uint8_t* pr = crop.data() + (static_cast<size_t>(y) * w + (x1 - 1)) * 3;
+        if (rgb_to_gray(pl[0], pl[1], pl[2]) < 48) dark_ring++;
+        if (rgb_to_gray(pr[0], pr[1], pr[2]) < 48) dark_ring++;
+        ring_total += 2;
+    }
+    const bool dark_bg_framed = (ring_total > 0) &&
+        (static_cast<float>(dark_ring) / static_cast<float>(ring_total) >= 0.35f);
+
+    int ny0 = 0, ny1 = h, nx0 = 0, nx1 = w;
+    if (dark_bg_framed) {
+        ny0 = y0; ny1 = y1; nx0 = x0; nx1 = x1;
+    } else if (asym_x || asym_y) {
+        const int sym_x = asym_x ? std::min(left_pad, right_pad) : 0;
+        const int sym_y = asym_y ? std::min(top_pad, bot_pad) : 0;
+        ny0 = asym_y ? std::max(0, y0 - sym_y) : 0;
+        ny1 = asym_y ? std::min(h, y1 + sym_y) : h;
+        nx0 = asym_x ? std::max(0, x0 - sym_x) : 0;
+        nx1 = asym_x ? std::min(w, x1 + sym_x) : w;
+    } else {
+        return;
+    }
+
+    if (nx0 == 0 && ny0 == 0 && nx1 == w && ny1 == h) return;
+    int nw = nx1 - nx0;
+    int nh = ny1 - ny0;
     std::vector<uint8_t> trimmed(static_cast<size_t>(nw) * nh * 3);
     for (int y = 0; y < nh; ++y) {
-        const uint8_t* src = crop.data() + (static_cast<size_t>(y0 + y) * w + x0) * 3;
+        const uint8_t* src = crop.data() + (static_cast<size_t>(ny0 + y) * w + nx0) * 3;
         std::copy_n(src, nw * 3, trimmed.data() + static_cast<size_t>(y) * nw * 3);
     }
     crop = std::move(trimmed);
@@ -324,6 +397,7 @@ Stage2SkinScore score_stage2_skin_templates(
     std::vector<uint8_t> crop;
     int cw = 0, ch = 0;
     extract_crop_rgb(rgb, img_w, img_h, box, crop, cw, ch);
+    trim_light_border_inplace(crop, cw, ch);
     center_square_inplace(crop, cw, ch, false);
 
     std::vector<float> q_rs;
@@ -398,7 +472,7 @@ Stage2SkinScore score_stage2_skin_templates(
     float best_scale = 1.0f;
     std::vector<float> q_scaled;
 
-    for (float scale : {0.97f, 1.0f, 1.03f}) {
+    for (float scale : {0.94f, 0.97f, 1.0f, 1.03f, 1.06f}) {
         scale_and_shift_rgb(q_rs, tpl_size, scale, 0, 0, q_scaled);
         std::vector<float> qs_g(npix);
         for (size_t i = 0; i < npix; ++i) {
@@ -522,6 +596,7 @@ float score_emoji_structure_zncc(
     std::vector<uint8_t> crop;
     int cw = 0, ch = 0;
     extract_crop_rgb(rgb, img_w, img_h, box, crop, cw, ch);
+    trim_light_border_inplace(crop, cw, ch);
     center_square_inplace(crop, cw, ch, false);
 
     std::vector<float> q;

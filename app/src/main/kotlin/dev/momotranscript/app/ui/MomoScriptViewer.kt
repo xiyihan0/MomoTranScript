@@ -46,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -307,6 +308,8 @@ fun MomoScriptViewer(
     scriptText: String,
     onScriptChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    isExpanded: Boolean = false,
+    onToggleExpand: (() -> Unit)? = null,
 ) {
     val palette = rememberMmsPalette()
     val pages = remember(scriptText) { parseMomoScriptPages(scriptText) }
@@ -342,48 +345,70 @@ fun MomoScriptViewer(
 
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // 1. Reader / Editor toggle + Alert filter chip
+        // 1. Compact, non-crushing toolbar: scrollable left pills + pinned line count & expand toggle
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilterChip(
-                selected = !isEditMode,
-                onClick = { isEditMode = false },
-                label = { Text("高亮阅读", maxLines = 1) },
-                leadingIcon = { Icon(Icons.Rounded.Menu, contentDescription = null, modifier = Modifier.size(16.dp)) },
-            )
-            FilterChip(
-                selected = isEditMode,
-                onClick = { isEditMode = true },
-                label = { Text("源码编辑", maxLines = 1) },
-                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(16.dp)) },
-            )
-            if (!isEditMode && alertCount > 0) {
-                FilterChip(
-                    selected = onlyAlerts,
-                    onClick = { onlyAlerts = !onlyAlerts },
-                    label = { Text("待校对 ($alertCount)", maxLines = 1) },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Rounded.Warning,
-                            contentDescription = null,
-                            tint = palette.alertBadge,
-                            modifier = Modifier.size(15.dp),
-                        )
-                    },
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ViewerToolbarPill(
+                    label = "高亮阅读",
+                    selected = !isEditMode,
+                    icon = Icons.Rounded.Menu,
+                    onClick = { isEditMode = false },
                 )
+                ViewerToolbarPill(
+                    label = "源码编辑",
+                    selected = isEditMode,
+                    icon = Icons.Rounded.Edit,
+                    onClick = { isEditMode = true },
+                )
+                if (!isEditMode && alertCount > 0) {
+                    ViewerToolbarPill(
+                        label = "待校对($alertCount)",
+                        selected = onlyAlerts,
+                        icon = Icons.Rounded.Warning,
+                        iconTint = palette.alertBadge,
+                        onClick = { onlyAlerts = !onlyAlerts },
+                    )
+                }
             }
-            Spacer(Modifier.weight(1f))
             Text(
                 text = "${displayedLines.size} 行",
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
             )
+            if (onToggleExpand != null) {
+                Surface(
+                    color = if (isExpanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                    shape = RoundedCornerShape(999.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable(onClick = onToggleExpand),
+                ) {
+                    Text(
+                        text = if (isExpanded) "还原" else "全屏",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isExpanded) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                    )
+                }
+            }
         }
 
         // 2. Pagination bar (shown automatically for multi-page / multi-image transcripts)
@@ -569,6 +594,48 @@ fun MomoScriptViewer(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ViewerToolbarPill(
+    label: String,
+    selected: Boolean,
+    icon: ImageVector,
+    iconTint: Color? = null,
+    onClick: () -> Unit,
+) {
+    val bg = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLowest
+    val fg = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val border = if (selected) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    Surface(
+        color = bg,
+        shape = RoundedCornerShape(10.dp),
+        border = border,
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconTint ?: fg,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                color = fg,
+                maxLines = 1,
+                softWrap = false,
+            )
         }
     }
 }

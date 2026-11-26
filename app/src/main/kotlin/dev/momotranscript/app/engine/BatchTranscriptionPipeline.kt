@@ -497,6 +497,7 @@ object BatchTranscriptionPipeline {
                                         fileRef = "GameData/BLDA/CharFace/$mtExpr.webp"
                                         matchedVisualAssets++
                                     } else if (b != null) {
+                                        matchedVisualAssets++
                                         fileRef = embedIllustration(rgb, imgW, imgH, b)
                                     }
                                 }

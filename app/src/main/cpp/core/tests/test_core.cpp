@@ -279,6 +279,20 @@ void test_visual_match_ccip_and_stage2() {
     assert(st2.diff_zncc > 0.95f);
     assert(st2.struct_zncc > 0.85f);
 
+    // 3b. Asymmetric white padding around query (e.g. wide box with 20px extra right white margin)
+    // must be trimmed back to symmetric framing and still align & match #2!
+    const int bw = tpl_sz + 24, bh = tpl_sz;
+    std::vector<uint8_t> bordered(static_cast<size_t>(bw) * bh * 3, 252);
+    for (int y = 0; y < tpl_sz; ++y) {
+        std::memcpy(bordered.data() + (static_cast<size_t>(y) * bw) * 3,
+                    query + static_cast<size_t>(y) * tpl_sz * 3,
+                    static_cast<size_t>(tpl_sz) * 3);
+    }
+    auto st2_bordered = mmt::score_stage2_skin_templates(bordered.data(), bw, bh, mmt::BoxI{0, 0, bw, bh}, stack.data(), count, tpl_sz, var_w.data());
+    assert(st2_bordered.best_index == 2);
+    assert(st2_bordered.diff_zncc > 0.90f);
+    assert(st2_bordered.struct_zncc > 0.80f);
+
     float ezncc = mmt::score_emoji_structure_zncc(query, tpl_sz, tpl_sz, mmt::BoxI{0, 0, tpl_sz, tpl_sz}, query, tpl_sz);
     assert(ezncc > 0.99f);
     std::cout << "[PASS] test_visual_match_ccip_and_stage2 (best=" << st2.best_index << ", diff=" << st2.diff_zncc << ")\n";
