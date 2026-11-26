@@ -247,7 +247,8 @@ void prepare_ccip_input_nchw(
     int dst_size,
     float* out_nchw,
     float* out_std,
-    float* out_aspect) {
+    float* out_aspect,
+    bool norm_half) {
     std::vector<uint8_t> crop;
     int cw = 0, ch = 0;
     extract_crop_rgb(rgb, img_w, img_h, box, crop, cw, ch);
@@ -265,6 +266,16 @@ void prepare_ccip_input_nchw(
     const size_t plane = static_cast<size_t>(dst_size) * static_cast<size_t>(dst_size);
     const float sx_scale = static_cast<float>(cw) / static_cast<float>(dst_size);
     const float sy_scale = static_cast<float>(ch) / static_cast<float>(dst_size);
+    const float mean_c[3] = {
+        norm_half ? 0.5f : kMean[0],
+        norm_half ? 0.5f : kMean[1],
+        norm_half ? 0.5f : kMean[2],
+    };
+    const float inv_std_c[3] = {
+        norm_half ? 2.0f : (1.0f / kStd[0]),
+        norm_half ? 2.0f : (1.0f / kStd[1]),
+        norm_half ? 2.0f : (1.0f / kStd[2]),
+    };
 
     for (int dy = 0; dy < dst_size; ++dy) {
         float sy = (static_cast<float>(dy) + 0.5f) * sy_scale - 0.5f;
@@ -273,7 +284,7 @@ void prepare_ccip_input_nchw(
             float sx = (static_cast<float>(dx) + 0.5f) * sx_scale - 0.5f;
             for (int c = 0; c < 3; ++c) {
                 float v = sample_bilinear_u8(crop.data(), cw, ch, sx, sy, c) * (1.0f / 255.0f);
-                out_nchw[c * plane + row + dx] = (v - kMean[c]) / kStd[c];
+                out_nchw[c * plane + row + dx] = (v - mean_c[c]) * inv_std_c[c];
             }
         }
     }

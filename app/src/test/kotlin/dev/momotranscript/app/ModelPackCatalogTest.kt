@@ -23,7 +23,7 @@ class ModelPackCatalogTest {
         val medPack = ModelPackCatalog.packs.first { it.id == "rec_medium" }
         assertTrue(medPack.approxTotalMiB in 15.0..22.0)
         val avatarPack = ModelPackCatalog.packs.first { it.id == "moetalk_avatar" }
-        assertTrue(avatarPack.approxTotalMiB in 28.0..36.0)
+        assertTrue(avatarPack.approxTotalMiB in 24.0..32.0)
     }
 
     @Test

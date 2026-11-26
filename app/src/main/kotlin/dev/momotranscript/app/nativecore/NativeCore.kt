@@ -224,13 +224,14 @@ object NativeCore {
         circleMask: Boolean,
         trimBorders: Boolean,
         dstSize: Int = 384,
+        normHalf: Boolean = false,
     ): CcipPreparedInput {
         check(loaded) { "Native library momotranscript_core is not loaded" }
         val meta = FloatArray(2)
         val nchw = nativePrepareCcipInput(
             rgbBytes, imgW, imgH,
             box.x0, box.y0, box.x1, box.y1,
-            circleMask, trimBorders, dstSize, meta,
+            circleMask, trimBorders, dstSize, normHalf, meta,
         )
         return CcipPreparedInput(nchw = nchw, std = meta[0], aspect = meta[1])
     }
@@ -379,6 +380,11 @@ object NativeCore {
         }
     }
 
+    data class UnifiedEncodeOutput(
+        val idEmb: FloatArray,
+        val exprLogits: FloatArray? = null,
+    )
+
     class MnnCcipHandle(
         modelPath: String,
         backendReq: Int,
@@ -387,21 +393,31 @@ object NativeCore {
     ) : java.io.Closeable {
         private var handle: Long
         val activeBackend: String
+        val inputSize: Int
+        val idDim: Int
+        val exprDim: Int
+        val isUnified: Boolean get() = exprDim > 0
 
         init {
             check(loaded) { "Native library momotranscript_core is not loaded" }
-            val info = arrayOfNulls<String>(1)
+            val info = arrayOfNulls<String>(4)
             handle = nativeMnnCcipCreate(modelPath, backendReq, threads, cachePath, info)
-            require(handle != 0L) { info[0] ?: "创建 MNN CCIP 会话失败" }
+            require(handle != 0L) { info[0] ?: "创建 MNN 视觉编码会话失败" }
             activeBackend = info[0] ?: "CPU(FP16)"
+            inputSize = info[1]?.toIntOrNull() ?: 384
+            idDim = info[2]?.toIntOrNull() ?: 768
+            exprDim = info[3]?.toIntOrNull() ?: 0
         }
 
-        fun runSingle(inputNchw: FloatArray): FloatArray {
+        fun runUnified(inputNchw: FloatArray): UnifiedEncodeOutput {
             check(handle != 0L) { "MnnCcipHandle already closed" }
-            val out = FloatArray(768)
-            check(nativeMnnCcipRun(handle, inputNchw, out)) { "MNN CCIP 推理失败" }
-            return out
+            val outId = FloatArray(idDim)
+            val outExpr = if (exprDim > 0) FloatArray(exprDim) else null
+            check(nativeMnnCcipRun(handle, inputNchw, outId, outExpr)) { "MNN 视觉编码推理失败" }
+            return UnifiedEncodeOutput(idEmb = outId, exprLogits = outExpr)
         }
+
+        fun runSingle(inputNchw: FloatArray): FloatArray = runUnified(inputNchw).idEmb
 
         override fun close() {
             if (handle != 0L) {
@@ -499,6 +515,7 @@ object NativeCore {
         circleMask: Boolean,
         trimBorders: Boolean,
         dstSize: Int,
+        normHalf: Boolean,
         outMeta: FloatArray,
     ): FloatArray
 
@@ -582,7 +599,8 @@ object NativeCore {
     private external fun nativeMnnCcipRun(
         handle: Long,
         inputNchw: FloatArray,
-        out768: FloatArray,
+        outId: FloatArray,
+        outExprLogits: FloatArray?,
     ): Boolean
     private external fun nativeMnnCcipDestroy(handle: Long)
 }

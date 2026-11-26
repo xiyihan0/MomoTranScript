@@ -9,6 +9,7 @@ import android.graphics.pdf.PdfRenderer
 import android.os.Build
 import android.util.Base64
 import dev.momotranscript.app.avatar.AvatarVisualMatch
+import dev.momotranscript.app.avatar.ExpressionDecoder
 import dev.momotranscript.app.avatar.InsertVisualMatch
 import dev.momotranscript.app.avatar.OnnxAvatarMatcher
 import dev.momotranscript.app.export.MoeTalkBranchPacker
@@ -312,6 +313,7 @@ object BatchTranscriptionPipeline {
 
         data class MoePageConversion(
             val messages: List<JsonObject>,
+            val annotatedMomoScript: String,
             val ccipAvTotal: Int,
             val ccipAvUnique: Int,
             val ccipInsTotal: Int,
@@ -575,8 +577,20 @@ object BatchTranscriptionPipeline {
                     }
                 }
             }
+            val orderedImageSlots = ArrayList<InsertVisualMatch?>()
+            for (m in messages) {
+                when (m.kind) {
+                    "insert_image" -> orderedImageSlots.add(if (m.box.size == 4) insertMatchesByBoxKey[boxKey(m.box)] else null)
+                    "bond" -> orderedImageSlots.add(null)
+                }
+            }
+            val annotatedScript = ExpressionDecoder.annotateMomoScriptImageLines(
+                pageRes.momoScriptText,
+                orderedImageSlots,
+            )
             return MoePageConversion(
                 messages = out,
+                annotatedMomoScript = annotatedScript,
                 ccipAvTotal = avTotal,
                 ccipAvUnique = avUniq,
                 ccipInsTotal = insTotal,
@@ -628,7 +642,7 @@ object BatchTranscriptionPipeline {
                         if (scriptBuilder.isNotEmpty()) scriptBuilder.append('\n')
                         scriptBuilder.append("=== ").append(label).append(" ===\n")
                     }
-                    scriptBuilder.append(pageRes.momoScriptText)
+                    scriptBuilder.append(conv.annotatedMomoScript)
                     branchInputs.add(MoeTalkBranchPacker.BranchInput(label, conv.messages))
                     previewPages.add(
                         PagePreviewRecord(
@@ -794,7 +808,7 @@ object BatchTranscriptionPipeline {
                                 pCcipSt2Ms += conv.ccipStage2Ms
                                 pCcipTotMs += conv.ccipTotalMs
 
-                                pageText.append(res.momoScriptText)
+                                pageText.append(conv.annotatedMomoScript)
                                 pageMtMsgs.addAll(conv.messages)
                             }
 

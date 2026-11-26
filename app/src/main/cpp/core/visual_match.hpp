@@ -16,7 +16,9 @@ struct Stage2SkinScore {
 /// Splits wide/tall multi-character avatar group boxes into up to `max_members` square sub-boxes.
 std::vector<BoxI> split_avatar_box(const BoxI& box, int max_members = 5);
 
-/// Prepares a single CCIP input tensor [3, 384, 384] (ImageNet mean/std normalized RGB):
+/// Prepares a single avatar/visual-encoder input tensor [3, dst_size, dst_size]:
+/// - If `norm_half == true`: normalizes RGB with mean=0.5, std=0.5 (AnimeFace-Unified PE-Core-S/16 @224px).
+/// - If `norm_half == false`: normalizes RGB with ImageNet mean/std (legacy CCIP @384px).
 /// - If `circle_mask == true`: center-squares crop and masks outside `r = 0.47 * side` to white (255).
 /// - Also outputs crop luminance std via `out_std` (for blank-avatar / blank-image rejection).
 void prepare_ccip_input_nchw(
@@ -29,7 +31,8 @@ void prepare_ccip_input_nchw(
     int dst_size,
     float* out_nchw,
     float* out_std,
-    float* out_aspect);
+    float* out_aspect,
+    bool norm_half = false);
 
 /// Computes a 16x16 RGB thumbnail average for fast intra-page visual deduplication.
 void compute_rgb_thumbnail(

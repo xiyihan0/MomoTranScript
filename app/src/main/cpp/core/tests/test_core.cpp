@@ -237,6 +237,11 @@ void test_visual_match_ccip_and_stage2() {
     // Corner pixel (0,0) was masked to white (255 -> 1.0 -> (1.0 - 0.485)/0.229 ~= 2.2489)
     assert(nchw[0] > 2.0f);
 
+    // 2b. Unified PE-Core-S preprocessing (norm_half=true: white 1.0 -> (1.0 - 0.5)/0.5 == 1.0)
+    std::vector<float> nchw_pe(3 * 64 * 64, 0.0f);
+    mmt::prepare_ccip_input_nchw(rgb.data(), w, h, mmt::BoxI{0, 0, w, h}, true, false, 64, nchw_pe.data(), nullptr, nullptr, true);
+    assert(std::abs(nchw_pe[0] - 1.0f) < 1e-4f);
+
     // 3. Stage-2 skin template expression discrimination (3 expressions, expression #2 matches query!)
     const int tpl_sz = 32;
     const int count = 3;

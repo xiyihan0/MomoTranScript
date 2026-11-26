@@ -357,16 +357,17 @@ bool MnnRecSession::run_batch(
 }
 
 // ============================= MnnCcipSession =============================
-// Uses static 76-LayerNorm-fused `ccip_caformer_24_ln_w8.mnn` (subgraphs=0).
-// Every fused MNN LayerNorm kernel computes mean/variance in FP32 internally even
-// under Precision_Low (OpenCL/ARMv8.2 FP16), eliminating the Pow(x-mean,2)=1.17e7
-// FP16 overflow while running all 188 MatMuls & 152 Convs at full FP16 GPU speed!
+// Supports BOTH:
+// 1. AnimeFace-Unified-PE-Core-S16 (`animeface_unified_v2_w4.mnn`): input [1,3,224,224],
+//    multi-output `e_id` [1,256] + `expr_logits` [1,48] + `e_expr` [1,128].
+// 2. Legacy CCIP (`ccip_caformer_24_ln_w4.mnn` / `w8.mnn`): input [1,3,384,384], single output [1,768].
 
 struct MnnCcipSession::Impl {
     MNN::Interpreter* net = nullptr;
     MNN::Session* session = nullptr;
     MNN::Tensor* input = nullptr;
-    MNN::Tensor* output = nullptr;
+    MNN::Tensor* out_id = nullptr;
+    MNN::Tensor* out_expr = nullptr;
     bool use_gpu_cache = false;
     bool cache_updated = false;
 
@@ -392,7 +393,7 @@ bool MnnCcipSession::load(
     impl_ = std::make_unique<Impl>();
     impl_->net = MNN::Interpreter::createFromFile(model_path.c_str());
     if (impl_->net == nullptr) {
-        if (err_out) *err_out = "MNN 无法加载 CCIP 模型: " + model_path;
+        if (err_out) *err_out = "MNN 无法加载视觉编码器模型: " + model_path;
         impl_.reset();
         return false;
     }
@@ -418,21 +419,56 @@ bool MnnCcipSession::load(
         impl_->session = impl_->net->createSession(scfg);
     }
     if (impl_->session == nullptr) {
-        if (err_out) *err_out = "MNN 创建 CCIP Session 失败";
+        if (err_out) *err_out = "MNN 创建视觉编码器 Session 失败";
         impl_.reset();
         return false;
     }
 
     impl_->input = impl_->net->getSessionInput(impl_->session, nullptr);
-    impl_->output = impl_->net->getSessionOutput(impl_->session, nullptr);
-    if (impl_->input == nullptr || impl_->output == nullptr) {
-        if (err_out) *err_out = "MNN CCIP 模型缺少输入或输出张量";
+    if (impl_->input == nullptr) {
+        if (err_out) *err_out = "MNN 视觉编码器缺少输入张量";
         impl_.reset();
         return false;
     }
 
-    impl_->net->resizeTensor(impl_->input, {1, 3, 384, 384});
+    const auto all_outs = impl_->net->getSessionOutputAll(impl_->session);
+    auto it_id = all_outs.find("e_id");
+    auto it_expr = all_outs.find("expr_logits");
+    if (it_id != all_outs.end() && it_expr != all_outs.end()) {
+        impl_->out_id = it_id->second;
+        impl_->out_expr = it_expr->second;
+        input_size_ = 224;
+        id_dim_ = 256;
+        expr_dim_ = 48;
+    } else {
+        impl_->out_id = impl_->net->getSessionOutput(impl_->session, nullptr);
+        impl_->out_expr = nullptr;
+        auto in_sh = impl_->input->shape();
+        input_size_ = (in_sh.size() >= 4 && in_sh[2] > 0) ? in_sh[2] : 384;
+        id_dim_ = 768;
+        expr_dim_ = 0;
+    }
+    if (impl_->out_id == nullptr) {
+        if (err_out) *err_out = "MNN 视觉编码器缺少输出张量";
+        impl_.reset();
+        return false;
+    }
+
+    impl_->net->resizeTensor(impl_->input, {1, 3, input_size_, input_size_});
     impl_->net->resizeSession(impl_->session);
+
+    {
+        auto sh = impl_->out_id->shape();
+        int total = 1;
+        for (int d : sh) total *= (d > 0 ? d : 1);
+        if (total > 0) id_dim_ = total;
+    }
+    if (impl_->out_expr != nullptr) {
+        auto sh = impl_->out_expr->shape();
+        int total = 1;
+        for (int d : sh) total *= (d > 0 ? d : 1);
+        if (total > 0) expr_dim_ = total;
+    }
 
     active_backend_ = query_session_backend_label(
         impl_->net, impl_->session, ftype, MNN::BackendConfig::Precision_Low);
@@ -440,8 +476,9 @@ bool MnnCcipSession::load(
 }
 
 bool MnnCcipSession::run_single(
-    const float* nchw_384,
-    float* out_768,
+    const float* nchw,
+    float* out_id,
+    float* out_expr_logits,
     std::string* err_out) {
     if (!impl_ || !impl_->session) {
         if (err_out) *err_out = "MnnCcipSession 未初始化";
@@ -449,12 +486,12 @@ bool MnnCcipSession::run_single(
     }
 
     std::unique_ptr<MNN::Tensor> host_in(
-        MNN::Tensor::create({1, 3, 384, 384}, halide_type_of<float>(), const_cast<float*>(nchw_384), MNN::Tensor::CAFFE));
+        MNN::Tensor::create({1, 3, input_size_, input_size_}, halide_type_of<float>(), const_cast<float*>(nchw), MNN::Tensor::CAFFE));
     impl_->input->copyFromHostTensor(host_in.get());
 
     auto err = impl_->net->runSession(impl_->session);
     if (err != MNN::NO_ERROR) {
-        if (err_out) *err_out = "MNN CCIP 推理失败, code=" + std::to_string(static_cast<int>(err));
+        if (err_out) *err_out = "MNN 视觉编码推理失败, code=" + std::to_string(static_cast<int>(err));
         return false;
     }
 
@@ -463,18 +500,31 @@ bool MnnCcipSession::run_single(
         impl_->cache_updated = true;
     }
 
-    auto sh = impl_->output->shape();
+    auto sh = impl_->out_id->shape();
     int total = 1;
     for (int d : sh) total *= d;
-    if (total < 768) {
-        if (err_out) *err_out = "MNN CCIP 输出维度异常";
+    if (total < id_dim_) {
+        if (err_out) *err_out = "MNN 视觉编码输出维度异常";
         return false;
     }
     std::vector<float> tmp(static_cast<size_t>(total));
     std::unique_ptr<MNN::Tensor> host_out(
         MNN::Tensor::create(sh, halide_type_of<float>(), tmp.data(), MNN::Tensor::CAFFE));
-    impl_->output->copyToHostTensor(host_out.get());
-    std::memcpy(out_768, tmp.data(), 768 * sizeof(float));
+    impl_->out_id->copyToHostTensor(host_out.get());
+    std::memcpy(out_id, tmp.data(), static_cast<size_t>(id_dim_) * sizeof(float));
+
+    if (impl_->out_expr != nullptr && out_expr_logits != nullptr && expr_dim_ > 0) {
+        auto esh = impl_->out_expr->shape();
+        int etotal = 1;
+        for (int d : esh) etotal *= d;
+        if (etotal >= expr_dim_) {
+            std::vector<float> etmp(static_cast<size_t>(etotal));
+            std::unique_ptr<MNN::Tensor> host_e(
+                MNN::Tensor::create(esh, halide_type_of<float>(), etmp.data(), MNN::Tensor::CAFFE));
+            impl_->out_expr->copyToHostTensor(host_e.get());
+            std::memcpy(out_expr_logits, etmp.data(), static_cast<size_t>(expr_dim_) * sizeof(float));
+        }
+    }
     return true;
 }
 

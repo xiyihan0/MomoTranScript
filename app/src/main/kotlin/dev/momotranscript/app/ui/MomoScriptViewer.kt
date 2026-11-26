@@ -67,7 +67,7 @@ data class MomoScriptPage(
 
 private val PAGE_HEADER_REGEX = Regex("^===\\s+(.+?)\\s+===$")
 private val LEFT_SPEAKER_REGEX = Regex("^>\\s+([^:\\n]{1,48}):(\\s?)(.*)$")
-private val INLINE_TOKEN_REGEX = Regex("\\[(image|unreadable|unknown speaker)\\]")
+private val INLINE_TOKEN_REGEX = Regex("\\[(image(?:: [^\\]]+)?|unreadable|unknown speaker)\\]")
 
 /**
  * Splits a combined MomoScript document into pages delimited by `=== Title ===` lines.
@@ -211,7 +211,7 @@ private fun AnnotatedString.Builder.appendBodyWithTokens(text: String, palette: 
             append(mainPart.substring(cursor, m.range.first))
         }
         val token = m.value
-        val color = if (token == "[image]") palette.imageBadge else palette.alertBadge
+        val color = if (token.startsWith("[image")) palette.imageBadge else palette.alertBadge
         pushStyle(SpanStyle(color = color, fontWeight = FontWeight.SemiBold))
         append(token)
         pop()

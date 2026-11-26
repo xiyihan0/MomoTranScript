@@ -47,8 +47,12 @@ object ModelPackCatalog {
     const val REC_SMALL_LEGACY = "mnn/rec_small_fp16.mnn"
     const val REC_MEDIUM_MODEL = "mnn/rec_medium_w8.mnn"
     const val REC_MEDIUM_LEGACY = "mnn/rec_medium_fp16.mnn"
+    const val UNIFIED_AVATAR_MODEL = "mnn/animeface_unified_v2_w4.mnn"
     const val CCIP_MODEL = "mnn/ccip_caformer_24_ln_w4.mnn"
     const val CCIP_LEGACY = "mnn/ccip_caformer_24_ln_w8.mnn"
+    const val STAGE1_PE256 = "avatar/stage1_embeddings_pe256.npz"
+    const val STAGE1_SVD_LEGACY = "avatar/stage1_embeddings_svd128.npz"
+    const val EXPR_VOCAB = "avatar/vocab_48.json"
     const val STAGE2_PACK = "avatar/stage2_templates_q80.avifs.pack"
     const val STAGE2_LEGACY = "avatar/stage2_templates.avifs.pack"
 
@@ -85,13 +89,14 @@ object ModelPackCatalog {
         ),
         ModelPackSpec(
             id = "moetalk_avatar",
-            title = "视觉匹配扩展包（可选 · 外部源）",
-            subtitle = "CCIP Fused-LN W4-HQQ + SVD-128 索引 + MMTAVIF2 q80 模板",
+            title = "视觉匹配与表情扩展包（可选 · 外部源）",
+            subtitle = "PE-Core-S/16 三合一 W4-HQQ（ID + 48类微表情）+ 256维索引 + q80 模板",
             required = false,
             files = listOf(
-                AssetFileSpec(CCIP_MODEL, 21.15, listOf(CCIP_LEGACY)),
+                AssetFileSpec(UNIFIED_AVATAR_MODEL, 15.17, listOf(CCIP_MODEL, CCIP_LEGACY)),
                 AssetFileSpec("avatar/catalog.json.zst", 0.61),
-                AssetFileSpec("avatar/stage1_embeddings_svd128.npz", 1.43),
+                AssetFileSpec(STAGE1_PE256, 2.44, listOf(STAGE1_SVD_LEGACY)),
+                AssetFileSpec(EXPR_VOCAB, 0.01),
                 AssetFileSpec(STAGE2_PACK, 9.15, listOf(STAGE2_LEGACY)),
             ),
         ),

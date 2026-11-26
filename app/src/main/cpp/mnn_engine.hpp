@@ -89,16 +89,23 @@ public:
         std::string* err_out = nullptr);
 
     bool run_single(
-        const float* nchw_384,
-        float* out_768,
+        const float* nchw,
+        float* out_id,
+        float* out_expr_logits = nullptr,
         std::string* err_out = nullptr);
 
     const std::string& active_backend() const { return active_backend_; }
+    int input_size() const { return input_size_; }
+    int id_dim() const { return id_dim_; }
+    int expr_dim() const { return expr_dim_; }
 
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::string active_backend_;
+    int input_size_ = 384;
+    int id_dim_ = 768;
+    int expr_dim_ = 0;
 };
 
 }  // namespace mmt

@@ -428,6 +428,7 @@ Java_dev_momotranscript_app_nativecore_NativeCore_nativePrepareCcipInput(
     jboolean circle_mask,
     jboolean trim_borders,
     jint dst_size,
+    jboolean norm_half,
     jfloatArray out_meta) {
     if (rgb_bytes == nullptr || img_w <= 0 || img_h <= 0 || dst_size <= 0) {
         return env->NewFloatArray(0);
@@ -448,7 +449,8 @@ Java_dev_momotranscript_app_nativecore_NativeCore_nativePrepareCcipInput(
         dst_size,
         buf.data(),
         &meta[0],
-        &meta[1]);
+        &meta[1],
+        norm_half == JNI_TRUE);
     env->ReleaseByteArrayElements(rgb_bytes, raw, JNI_ABORT);
 
     if (out_meta != nullptr && env->GetArrayLength(out_meta) >= 2) {
@@ -741,8 +743,12 @@ Java_dev_momotranscript_app_nativecore_NativeCore_nativeMnnCcipCreate(
         delete sess;
         return 0L;
     }
-    if (out_info != nullptr && env->GetArrayLength(out_info) >= 1) {
-        env->SetObjectArrayElement(out_info, 0, env->NewStringUTF(sess->active_backend().c_str()));
+    if (out_info != nullptr) {
+        const jsize len = env->GetArrayLength(out_info);
+        if (len >= 1) env->SetObjectArrayElement(out_info, 0, env->NewStringUTF(sess->active_backend().c_str()));
+        if (len >= 2) env->SetObjectArrayElement(out_info, 1, env->NewStringUTF(std::to_string(sess->input_size()).c_str()));
+        if (len >= 3) env->SetObjectArrayElement(out_info, 2, env->NewStringUTF(std::to_string(sess->id_dim()).c_str()));
+        if (len >= 4) env->SetObjectArrayElement(out_info, 3, env->NewStringUTF(std::to_string(sess->expr_dim()).c_str()));
     }
     return reinterpret_cast<jlong>(sess);
 }
@@ -753,17 +759,22 @@ Java_dev_momotranscript_app_nativecore_NativeCore_nativeMnnCcipRun(
     jobject /* thiz */,
     jlong handle,
     jfloatArray input_nchw,
-    jfloatArray out_768) {
+    jfloatArray out_id,
+    jfloatArray out_expr_logits) {
     auto* sess = reinterpret_cast<mmt::MnnCcipSession*>(handle);
-    if (sess == nullptr || input_nchw == nullptr || out_768 == nullptr) {
+    if (sess == nullptr || input_nchw == nullptr || out_id == nullptr) {
         return JNI_FALSE;
     }
     jfloat* in_ptr = env->GetFloatArrayElements(input_nchw, nullptr);
-    jfloat* o_ptr = env->GetFloatArrayElements(out_768, nullptr);
+    jfloat* o_ptr = env->GetFloatArrayElements(out_id, nullptr);
+    jfloat* e_ptr = out_expr_logits != nullptr ? env->GetFloatArrayElements(out_expr_logits, nullptr) : nullptr;
     std::string err;
-    const bool ok = sess->run_single(in_ptr, o_ptr, &err);
+    const bool ok = sess->run_single(in_ptr, o_ptr, e_ptr, &err);
     env->ReleaseFloatArrayElements(input_nchw, in_ptr, JNI_ABORT);
-    env->ReleaseFloatArrayElements(out_768, o_ptr, ok ? 0 : JNI_ABORT);
+    env->ReleaseFloatArrayElements(out_id, o_ptr, ok ? 0 : JNI_ABORT);
+    if (e_ptr != nullptr) {
+        env->ReleaseFloatArrayElements(out_expr_logits, e_ptr, ok ? 0 : JNI_ABORT);
+    }
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 

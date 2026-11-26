@@ -110,7 +110,7 @@ data class DecodedSkinTemplates(
  * - `avatar/stage1_embeddings.npz` (FP16 -> FP32 Stage-1 embeddings)
  * - `avatar/stage2_templates.avifs.pack` (`MMTAVIF1` O(1) seek container for Stage-2 templates)
  */
-class AvatarGallery(avatarDir: File) : Closeable {
+class AvatarGallery(avatarDir: File, preferPe256: Boolean = false) : Closeable {
 
     val catalog: AvatarCatalog
     val projMatrix: FloatMatrix? // (768, K) when SVD-compressed Stage-1 embeddings are loaded
@@ -147,16 +147,19 @@ class AvatarGallery(avatarDir: File) : Closeable {
         }
         tplSize = catalog.options.tplSize
 
+        val peNpzFile = File(avatarDir, "stage1_embeddings_pe256.npz")
         val svdNpzFile = File(avatarDir, "stage1_embeddings_svd128.npz")
         val legacyNpzFile = File(avatarDir, "stage1_embeddings.npz")
         val npzFile = when {
+            preferPe256 && peNpzFile.isFile -> peNpzFile
             svdNpzFile.isFile -> svdNpzFile
             legacyNpzFile.isFile -> legacyNpzFile
-            else -> error("缺少 Stage-1 向量文件：${svdNpzFile.absolutePath}")
+            peNpzFile.isFile -> peNpzFile
+            else -> error("缺少 Stage-1 向量文件：${peNpzFile.absolutePath}")
         }
         val matrices = NpyReader.loadNpzMatrices(npzFile)
         projMatrix = matrices["proj"]
-        val defaultCols = projMatrix?.cols ?: 768
+        val defaultCols = projMatrix?.cols ?: matrices["skin_emb"]?.cols ?: matrices["char_emb"]?.cols ?: 768
         charEmb = matrices["char_emb"] ?: FloatMatrix(0, defaultCols, FloatArray(0))
         charEmbLowres = matrices["char_emb_lowres"]
         skinEmb = matrices["skin_emb"] ?: FloatMatrix(0, defaultCols, FloatArray(0))

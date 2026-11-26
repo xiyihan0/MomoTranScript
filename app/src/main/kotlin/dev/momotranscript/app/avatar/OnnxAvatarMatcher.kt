@@ -15,6 +15,7 @@ data class AvatarVisualMatch(
     val assetId: String = "",
     val source: String = "",
     val expressionId: String = "",
+    val expressionSummary: String = "",
     val customClusterId: String = "",
     val confidence: Float = 0f,
     val subBox: WindowBox,
@@ -25,6 +26,7 @@ data class InsertVisualMatch(
     val status: String, // "matched" | "open_set_rejected"
     val character: String = "",
     val expressionId: String = "",
+    val expressionSummary: String = "",
     val emojiId: String = "",
     val source: String = "",
     val packV2Preset: String? = null,
@@ -79,21 +81,31 @@ class OnnxAvatarMatcher(
 
     // Batch-wide custom OC character prototypes so the same OC keeps one custom ID across pages
     private val customProtos = ArrayList<FloatArray>()
-    // Cross-page thumbnail -> CCIP embedding cache (eliminates redundant encodes across 175-page PDFs!)
-    private data class CachedThumbEmb(val thumb: FloatArray, val emb: FloatArray)
+    // Cross-page thumbnail -> (embedding, expressionSummary) cache
+    private data class CachedThumbEmb(val thumb: FloatArray, val emb: FloatArray, val exprSummary: String = "")
     private val avatarEmbCache = ArrayList<CachedThumbEmb>()
     private val insertEmbCache = ArrayList<CachedThumbEmb>()
+    private val expressionDecoder: ExpressionDecoder?
 
     init {
-        val modelFile = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
-            bundleRoot,
-            dev.momotranscript.app.model.ModelPackCatalog.CCIP_MODEL,
-            dev.momotranscript.app.model.ModelPackCatalog.CCIP_LEGACY,
-        )
-        require(modelFile.isFile) { "缺少 MNN Fused-LN CCIP 模型：${modelFile.absolutePath}（请前往「模型」页更新视觉包）" }
         val avatarDir = File(bundleRoot, "avatar")
+        val unifiedModelFile = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL)
+        val unifiedEmbFile = File(avatarDir, "stage1_embeddings_pe256.npz")
+        val useUnified = unifiedModelFile.isFile && unifiedModelFile.length() > 0L &&
+            unifiedEmbFile.isFile && unifiedEmbFile.length() > 0L
+
+        val modelFile = if (useUnified) {
+            unifiedModelFile
+        } else {
+            dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+                bundleRoot,
+                dev.momotranscript.app.model.ModelPackCatalog.CCIP_MODEL,
+                dev.momotranscript.app.model.ModelPackCatalog.CCIP_LEGACY,
+            )
+        }
+        require(modelFile.isFile) { "缺少 MNN 视觉编码模型：${modelFile.absolutePath}（请前往「模型」页更新视觉包）" }
         val tGal = System.nanoTime()
-        gallery = AvatarGallery(avatarDir)
+        gallery = AvatarGallery(avatarDir, preferPe256 = useUnified)
         val galMs = (System.nanoTime() - tGal) / 1_000_000L
 
         val ccipReq = when (backendMode) {
@@ -119,7 +131,17 @@ class OnnxAvatarMatcher(
             cachePath = cachePath,
         )
         val sessMs = (System.nanoTime() - tSess) / 1_000_000L
-        val svdTag = gallery.projMatrix?.let { "SVD${it.cols}" } ?: "FP16-768"
+        expressionDecoder = if (ccipHandle.isUnified) {
+            ExpressionDecoder.loadIfPresent(File(avatarDir, "vocab_48.json"))
+        } else {
+            null
+        }
+        val encTag = when {
+            ccipHandle.isUnified && expressionDecoder != null -> "PE256+48Expr"
+            ccipHandle.isUnified -> "PE256"
+            gallery.projMatrix != null -> "SVD${gallery.projMatrix.cols}"
+            else -> "FP16-768"
+        }
 
         initProfile = CcipInitProfile(
             galleryLoadMs = galMs,
@@ -128,7 +150,7 @@ class OnnxAvatarMatcher(
             skinCount = gallery.catalog.skins.size,
             charCount = gallery.catalog.chars.size,
             emojiCount = gallery.catalog.emojis.size,
-            ep = "${ccipHandle.activeBackend}+$svdTag",
+            ep = "${ccipHandle.activeBackend}+$encTag",
         )
 
         nChars = gallery.charEmb.rows
@@ -189,17 +211,23 @@ class OnnxAvatarMatcher(
             rgbBytes, imgW, imgH, expandedBoxes, circleMask = true, maeThreshold = 5.5f, shiftTolerant = true,
         )
 
-        // Encode only cache-miss representative crops with CCIP
+        // Encode only cache-miss representative crops
         val repPrepared = repIndices.map { idx ->
-            NativeCore.prepareCcipInput(rgbBytes, imgW, imgH, expandedBoxes[idx], circleMask = true, trimBorders = false)
+            NativeCore.prepareCcipInput(
+                rgbBytes, imgW, imgH, expandedBoxes[idx],
+                circleMask = true, trimBorders = false,
+                dstSize = ccipHandle.inputSize, normHalf = ccipHandle.isUnified,
+            )
         }
         val repEmbeddings = arrayOfNulls<FloatArray>(repIndices.size)
+        val repExprSummaries = Array(repIndices.size) { "" }
         val missSlots = ArrayList<Int>()
         var cacheHits = 0
         for (slot in repIndices.indices) {
             val hit = lookupThumbCache(avatarEmbCache, repThumbs[slot], 5.5f, shiftTolerant = true)
             if (hit != null) {
-                repEmbeddings[slot] = hit
+                repEmbeddings[slot] = hit.emb
+                repExprSummaries[slot] = hit.exprSummary
                 cacheHits++
             } else {
                 missSlots.add(slot)
@@ -210,9 +238,11 @@ class OnnxAvatarMatcher(
             val encoded = encodeBatch(missSlots.map { repPrepared[it].nchw })
             for (k in missSlots.indices) {
                 val slot = missSlots[k]
-                repEmbeddings[slot] = encoded[k]
+                val (emb, exprSum) = encoded[k]
+                repEmbeddings[slot] = emb
+                repExprSummaries[slot] = exprSum
                 if (avatarEmbCache.size < MAX_THUMB_CACHE) {
-                    avatarEmbCache.add(CachedThumbEmb(repThumbs[slot], encoded[k]))
+                    avatarEmbCache.add(CachedThumbEmb(repThumbs[slot], emb, exprSum))
                 }
             }
         }
@@ -325,11 +355,13 @@ class OnnxAvatarMatcher(
             val priorApplied = priorCanons.isNotEmpty() && bestChar in priorCanons
             val effThreshold = AVATAR_THRESHOLD - if (priorApplied) 0.04f else 0f
 
+            val exprSum = repExprSummaries[itemToRep[i]]
             if (rawSim < effThreshold) {
                 val cid = assignCustomCluster(cl.proto)
                 expandedResults.add(
                     AvatarVisualMatch(
                         status = "unknown_avatar",
+                        expressionSummary = exprSum,
                         customClusterId = cid,
                         confidence = rawSim.coerceAtLeast(0f),
                         subBox = box,
@@ -347,6 +379,7 @@ class OnnxAvatarMatcher(
                         skin = ch.skin,
                         assetId = ch.assetId,
                         source = ch.source,
+                        expressionSummary = exprSum,
                         confidence = rawSim,
                         subBox = box,
                     ),
@@ -375,6 +408,7 @@ class OnnxAvatarMatcher(
                         assetId = sk.prototypeExpressionId,
                         source = sk.source,
                         expressionId = exprId,
+                        expressionSummary = exprSum,
                         confidence = rawSim,
                         subBox = box,
                     ),
@@ -417,6 +451,7 @@ class OnnxAvatarMatcher(
             val prep = NativeCore.prepareCcipInput(
                 rgbBytes, imgW, imgH, insertBoxes[i],
                 circleMask = false, trimBorders = true,
+                dstSize = ccipHandle.inputSize, normHalf = ccipHandle.isUnified,
             )
             if (prep.aspect > 1.85f || prep.aspect < 1f / 1.85f || prep.std < 8.0f) {
                 results[i] = InsertVisualMatch(kind = "illustration", status = "open_set_rejected")
@@ -439,12 +474,14 @@ class OnnxAvatarMatcher(
             rgbBytes, imgW, imgH, eligibleBoxes, circleMask = false, maeThreshold = 3.5f, shiftTolerant = true,
         )
         val repEmbsArr = arrayOfNulls<FloatArray>(repLocalIndices.size)
+        val repExprSummaries = Array(repLocalIndices.size) { "" }
         val missSlots = ArrayList<Int>()
         var cacheHits = 0
         for (slot in repLocalIndices.indices) {
             val hit = lookupThumbCache(insertEmbCache, repThumbs[slot], 3.5f, shiftTolerant = true)
             if (hit != null) {
-                repEmbsArr[slot] = hit
+                repEmbsArr[slot] = hit.emb
+                repExprSummaries[slot] = hit.exprSummary
                 cacheHits++
             } else {
                 missSlots.add(slot)
@@ -455,9 +492,11 @@ class OnnxAvatarMatcher(
             val encoded = encodeBatch(missSlots.map { eligiblePrepared[repLocalIndices[it]].nchw })
             for (k in missSlots.indices) {
                 val slot = missSlots[k]
-                repEmbsArr[slot] = encoded[k]
+                val (emb, exprSum) = encoded[k]
+                repEmbsArr[slot] = emb
+                repExprSummaries[slot] = exprSum
                 if (insertEmbCache.size < MAX_THUMB_CACHE) {
-                    insertEmbCache.add(CachedThumbEmb(repThumbs[slot], encoded[k]))
+                    insertEmbCache.add(CachedThumbEmb(repThumbs[slot], emb, exprSum))
                 }
             }
         }
@@ -551,11 +590,13 @@ class OnnxAvatarMatcher(
                 }
             }
 
+            val exprSum = repExprSummaries[repSlot]
             results[origI] = when {
                 bestEmojiMeta != null && (bestCf == null || bestEmojiScore > bestCf.s1Raw + 0.04f) -> {
                     InsertVisualMatch(
                         kind = "emoji",
                         status = "matched",
+                        expressionSummary = exprSum,
                         emojiId = bestEmojiMeta.emojiId,
                         source = bestEmojiMeta.source,
                         confidence = bestEmojiScore,
@@ -567,13 +608,18 @@ class OnnxAvatarMatcher(
                         status = "matched",
                         character = bestCf.skin.character,
                         expressionId = bestCf.expr.expressionId,
+                        expressionSummary = exprSum,
                         source = bestCf.expr.source,
                         packV2Preset = bestCf.expr.packV2?.preset,
                         packV2Ordinal = bestCf.expr.packV2?.ordinal ?: 0,
                         confidence = bestCf.s1Raw,
                     )
                 }
-                else -> InsertVisualMatch(kind = "illustration", status = "open_set_rejected")
+                else -> InsertVisualMatch(
+                    kind = "illustration",
+                    status = "open_set_rejected",
+                    expressionSummary = exprSum,
+                )
             }
         }
 
@@ -588,13 +634,15 @@ class OnnxAvatarMatcher(
         return results.map { it ?: InsertVisualMatch("illustration", "open_set_rejected") }
     }
 
-    private fun encodeBatch(inputsNchw: List<FloatArray>): List<FloatArray> {
+    private fun encodeBatch(inputsNchw: List<FloatArray>): List<Pair<FloatArray, String>> {
         if (inputsNchw.isEmpty()) return emptyList()
-        val out = ArrayList<FloatArray>(inputsNchw.size)
+        val out = ArrayList<Pair<FloatArray, String>>(inputsNchw.size)
         for (nchw in inputsNchw) {
-            val raw768 = ccipHandle.runSingle(nchw)
-            val norm768 = l2Normalize(raw768)
-            out.add(gallery.projectQuery(norm768))
+            val res = ccipHandle.runUnified(nchw)
+            val norm = l2Normalize(res.idEmb)
+            val projected = if (ccipHandle.isUnified) norm else gallery.projectQuery(norm)
+            val exprSum = expressionDecoder?.decodeCaption(res.exprLogits) ?: ""
+            out.add(projected to exprSum)
         }
         return out
     }
@@ -604,10 +652,10 @@ class OnnxAvatarMatcher(
         thumb: FloatArray,
         threshold: Float,
         shiftTolerant: Boolean = false,
-    ): FloatArray? {
+    ): CachedThumbEmb? {
         for (entry in cache) {
             val d = if (shiftTolerant) shiftTolerantMae16(thumb, entry.thumb) else meanAbsError(thumb, entry.thumb)
-            if (d <= threshold) return entry.emb
+            if (d <= threshold) return entry
         }
         return null
     }
@@ -675,7 +723,9 @@ class OnnxAvatarMatcher(
         private const val TOP_K_SKINS = 3
 
         fun isAvailable(bundleRoot: File): Boolean {
-            val modelMnn = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
+            val unifiedMnn = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.UNIFIED_AVATAR_MODEL)
+            val npzPe = File(bundleRoot, dev.momotranscript.app.model.ModelPackCatalog.STAGE1_PE256)
+            val legacyMnn = dev.momotranscript.app.model.ModelPackCatalog.resolveFile(
                 bundleRoot,
                 dev.momotranscript.app.model.ModelPackCatalog.CCIP_MODEL,
                 dev.momotranscript.app.model.ModelPackCatalog.CCIP_LEGACY,
@@ -684,7 +734,10 @@ class OnnxAvatarMatcher(
             val npzLegacy = File(bundleRoot, "avatar/stage1_embeddings.npz")
             val catZst = File(bundleRoot, "avatar/catalog.json.zst")
             val catJson = File(bundleRoot, "avatar/catalog.json")
-            return modelMnn.isFile && (npzSvd.isFile || npzLegacy.isFile) && (catZst.isFile || catJson.isFile)
+            val hasCatalog = catZst.isFile || catJson.isFile
+            val hasUnified = unifiedMnn.isFile && npzPe.isFile
+            val hasLegacy = legacyMnn.isFile && (npzSvd.isFile || npzLegacy.isFile)
+            return hasCatalog && (hasUnified || hasLegacy)
         }
 
         private fun l2Normalize(v: FloatArray): FloatArray {
