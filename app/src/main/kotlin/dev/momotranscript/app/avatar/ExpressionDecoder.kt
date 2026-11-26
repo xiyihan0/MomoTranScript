@@ -37,6 +37,10 @@ class ExpressionDecoder(private val entries: List<ExpressionTagEntry>) {
 
     fun decodeCaption(logits: FloatArray?, maxTags: Int = 3): String {
         if (logits == null || logits.isEmpty() || entries.isEmpty()) return ""
+        // Reject the entire vector if any logit is NaN/±Inf so +Inf can never be clamped to 30f -> sigmoid 1.0f.
+        for (v in logits) {
+            if (!v.isFinite()) return ""
+        }
         val hits = ArrayList<Hit>()
         for (e in entries) {
             if (e.id !in logits.indices) continue

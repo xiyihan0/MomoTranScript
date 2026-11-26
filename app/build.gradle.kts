@@ -26,8 +26,8 @@ android {
     applicationId = "dev.momotranscript.app"
     minSdk = 26
     targetSdk = 36
-    versionCode = 24
-    versionName = "0.6.6"
+    versionCode = 25
+    versionName = "0.6.7"
 
     buildConfigField("String", "HOMEPAGE_URL", "\"https://www.xiyihan.cn/momotranscript/\"")
     buildConfigField("String", "PRIVACY_POLICY_URL", "\"https://www.xiyihan.cn/momotranscript/privacy.html\"")

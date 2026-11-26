@@ -9,7 +9,7 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 data class AvatarVisualMatch(
-    val status: String, // "matched" | "unknown_avatar"
+    val status: String, // "matched" | "unknown_avatar" | "encode_failed"
     val character: String = "",
     val skin: String = "",
     val assetId: String = "",
@@ -23,7 +23,7 @@ data class AvatarVisualMatch(
 
 data class InsertVisualMatch(
     val kind: String,   // "emoji" | "charface" | "illustration"
-    val status: String, // "matched" | "open_set_rejected"
+    val status: String, // "matched" | "open_set_rejected" | "encode_failed"
     val character: String = "",
     val expressionId: String = "",
     val expressionSummary: String = "",
@@ -48,6 +48,7 @@ data class CcipCallStats(
     val inputBoxes: Int = 0,
     val uniqueCrops: Int = 0,
     val cacheHits: Int = 0,
+    val failedCrops: Int = 0,
     val inferMs: Long = 0L,
     val stage2Ms: Long = 0L,
     val totalMs: Long = 0L,
@@ -83,7 +84,7 @@ class OnnxAvatarMatcher(
     // Batch-wide custom OC character prototypes so the same OC keeps one custom ID across pages
     private val customProtos = ArrayList<FloatArray>()
     // Cross-page thumbnail -> (embedding, expressionSummary) cache
-    private data class CachedThumbEmb(val thumb: FloatArray, val emb: FloatArray, val exprSummary: String = "")
+    internal data class CachedThumbEmb(val thumb: FloatArray, val emb: FloatArray, val exprSummary: String = "")
     private val avatarEmbCache = ArrayList<CachedThumbEmb>()
     private val insertEmbCache = ArrayList<CachedThumbEmb>()
     private val expressionDecoder: ExpressionDecoder?
@@ -243,17 +244,22 @@ class OnnxAvatarMatcher(
             }
         }
         val tInf0 = System.nanoTime()
-        if (missSlots.isNotEmpty()) {
-            val encoded = encodeBatch(missSlots.map { repPrepared[it].nchw })
-            for (k in missSlots.indices) {
-                val slot = missSlots[k]
-                val (emb, exprSum) = encoded[k]
-                repEmbeddings[slot] = emb
-                repExprSummaries[slot] = exprSum
-                if (avatarEmbCache.size < MAX_THUMB_CACHE) {
-                    avatarEmbCache.add(CachedThumbEmb(repThumbs[slot], emb, exprSum))
-                }
-            }
+        val failedAvatars = if (missSlots.isNotEmpty()) {
+            encodeAndCacheMisses(
+                missSlots = missSlots,
+                inputsNchw = missSlots.map { repPrepared[it].nchw },
+                repThumbs = repThumbs,
+                repEmbeddings = repEmbeddings,
+                repExprSummaries = repExprSummaries,
+                cache = avatarEmbCache,
+                maxCacheSize = MAX_THUMB_CACHE,
+                isUnified = ccipHandle.isUnified,
+                project = gallery::projectQuery,
+                decoder = expressionDecoder,
+                runEncoder = ccipHandle::runUnified,
+            )
+        } else {
+            0
         }
         val inferMs = (System.nanoTime() - tInf0) / 1_000_000L
         var stage2Ns = 0L
@@ -273,11 +279,11 @@ class OnnxAvatarMatcher(
 
         for (i in expandedBoxes.indices) {
             val repSlot = itemToRep[i]
-            if (repPrepared[repSlot].std < 8.0f) {
+            val vec = repEmbeddings[repSlot]
+            if (repPrepared[repSlot].std < 8.0f || vec == null) {
                 itemToCluster[i] = -1
                 continue
             }
-            val vec = repEmbeddings[repSlot]!!
             val prior = resolvedPriors[i]
             val side = minOf(expandedBoxes[i].width, expandedBoxes[i].height).toFloat()
             val alpha = when {
@@ -326,10 +332,12 @@ class OnnxAvatarMatcher(
             val box = expandedBoxes[i]
             val ci = itemToCluster[i]
             if (ci < 0) {
+                val repSlot = itemToRep[i]
+                val isEncodeFailure = repPrepared[repSlot].std >= 8.0f && repEmbeddings[repSlot] == null
                 expandedResults.add(
                     AvatarVisualMatch(
-                        status = "unknown_avatar",
-                        customClusterId = "blank_avatar",
+                        status = if (isEncodeFailure) "encode_failed" else "unknown_avatar",
+                        customClusterId = if (isEncodeFailure) "encode_failed" else "blank_avatar",
                         confidence = 0f,
                         subBox = box,
                     ),
@@ -429,6 +437,7 @@ class OnnxAvatarMatcher(
             inputBoxes = expandedBoxes.size,
             uniqueCrops = missSlots.size,
             cacheHits = cacheHits,
+            failedCrops = failedAvatars,
             inferMs = inferMs,
             stage2Ms = stage2Ns / 1_000_000L,
             totalMs = (System.nanoTime() - tCall0) / 1_000_000L,
@@ -497,30 +506,46 @@ class OnnxAvatarMatcher(
             }
         }
         val tInf0 = System.nanoTime()
-        if (missSlots.isNotEmpty()) {
-            val encoded = encodeBatch(missSlots.map { eligiblePrepared[repLocalIndices[it]].nchw })
-            for (k in missSlots.indices) {
-                val slot = missSlots[k]
-                val (emb, exprSum) = encoded[k]
-                repEmbsArr[slot] = emb
-                repExprSummaries[slot] = exprSum
-                if (insertEmbCache.size < MAX_THUMB_CACHE) {
-                    insertEmbCache.add(CachedThumbEmb(repThumbs[slot], emb, exprSum))
-                }
-            }
+        val failedInserts = if (missSlots.isNotEmpty()) {
+            encodeAndCacheMisses(
+                missSlots = missSlots,
+                inputsNchw = missSlots.map { eligiblePrepared[repLocalIndices[it]].nchw },
+                repThumbs = repThumbs,
+                repEmbeddings = repEmbsArr,
+                repExprSummaries = repExprSummaries,
+                cache = insertEmbCache,
+                maxCacheSize = MAX_THUMB_CACHE,
+                isUnified = ccipHandle.isUnified,
+                project = gallery::projectQuery,
+                decoder = expressionDecoder,
+                runEncoder = ccipHandle::runUnified,
+            )
+        } else {
+            0
         }
-        val repEmbs = repEmbsArr.map { it!! }
         val inferMs = (System.nanoTime() - tInf0) / 1_000_000L
         var stage2Ns = 0L
 
         val skinMat = gallery.skinEmb
         val emojiMat = gallery.emojiEmb
-        val repSkinSims = repEmbs.map { matVecDot(skinMat.data, skinMat.rows, skinMat.cols, it) }
-        val repEmojiSims = repEmbs.map { matVecDot(emojiMat.data, emojiMat.rows, emojiMat.cols, it) }
+        val repSkinSims = repEmbsArr.map { emb ->
+            if (emb != null) matVecDot(skinMat.data, skinMat.rows, skinMat.cols, emb) else FloatArray(0)
+        }
+        val repEmojiSims = repEmbsArr.map { emb ->
+            if (emb != null) matVecDot(emojiMat.data, emojiMat.rows, emojiMat.cols, emb) else FloatArray(0)
+        }
 
         for (localI in eligibleIndices.indices) {
             val origI = eligibleIndices[localI]
             val repSlot = localToRep[localI]
+            if (repEmbsArr[repSlot] == null) {
+                results[origI] = InsertVisualMatch(
+                    kind = "illustration",
+                    status = "encode_failed",
+                    expressionSummary = "",
+                )
+                continue
+            }
             val box = insertBoxes[origI]
 
             // 1. Check Emoji match
@@ -661,24 +686,12 @@ class OnnxAvatarMatcher(
             inputBoxes = insertBoxes.size,
             uniqueCrops = missSlots.size,
             cacheHits = cacheHits,
+            failedCrops = failedInserts,
             inferMs = inferMs,
             stage2Ms = stage2Ns / 1_000_000L,
             totalMs = (System.nanoTime() - tCall0) / 1_000_000L,
         )
         return results.map { it ?: InsertVisualMatch("illustration", "open_set_rejected") }
-    }
-
-    private fun encodeBatch(inputsNchw: List<FloatArray>): List<Pair<FloatArray, String>> {
-        if (inputsNchw.isEmpty()) return emptyList()
-        val out = ArrayList<Pair<FloatArray, String>>(inputsNchw.size)
-        for (nchw in inputsNchw) {
-            val res = ccipHandle.runUnified(nchw)
-            val norm = l2Normalize(res.idEmb)
-            val projected = if (ccipHandle.isUnified) norm else gallery.projectQuery(norm)
-            val exprSum = expressionDecoder?.decodeCaption(res.exprLogits) ?: ""
-            out.add(projected to exprSum)
-        }
-        return out
     }
 
     private fun lookupThumbCache(
@@ -795,6 +808,67 @@ class OnnxAvatarMatcher(
             val hasUnified = unifiedMnn.isFile && npzPe.isFile
             val hasLegacy = legacyMnn.isFile && (npzSvd.isFile || npzLegacy.isFile)
             return hasCatalog && (hasUnified || hasLegacy)
+        }
+
+        internal fun isAllFinite(v: FloatArray?): Boolean {
+            if (v == null || v.isEmpty()) return false
+            for (x in v) if (!x.isFinite()) return false
+            return true
+        }
+
+        internal fun isFiniteNonZero(v: FloatArray?): Boolean {
+            if (!isAllFinite(v)) return false
+            var sum = 0.0
+            for (x in v!!) sum += x.toDouble() * x.toDouble()
+            return sum.isFinite() && sum > 1e-16
+        }
+
+        /**
+         * Encodes cache-miss slots with strict non-finite isolation: if either `idEmb` or `exprLogits`
+         * contains `NaN`/`±Inf` (or `idEmb` has zero norm), that slot is marked failed (`null` embedding,
+         * empty expression), expression decoding is skipped, and nothing is written to [cache].
+         * Healthy slots in the same batch proceed normally.
+         */
+        internal fun encodeAndCacheMisses(
+            missSlots: List<Int>,
+            inputsNchw: List<FloatArray>,
+            repThumbs: List<FloatArray>,
+            repEmbeddings: Array<FloatArray?>,
+            repExprSummaries: Array<String>,
+            cache: MutableList<CachedThumbEmb>,
+            maxCacheSize: Int,
+            isUnified: Boolean,
+            project: (FloatArray) -> FloatArray,
+            decoder: ExpressionDecoder?,
+            runEncoder: (FloatArray) -> NativeCore.UnifiedEncodeOutput,
+        ): Int {
+            var failedCount = 0
+            for (k in missSlots.indices) {
+                val slot = missSlots[k]
+                val res = runEncoder(inputsNchw[k])
+                val logitsOk = res.exprLogits == null || isAllFinite(res.exprLogits)
+                if (!isFiniteNonZero(res.idEmb) || !logitsOk) {
+                    repEmbeddings[slot] = null
+                    repExprSummaries[slot] = ""
+                    failedCount++
+                    continue
+                }
+                val norm = l2Normalize(res.idEmb)
+                val projected = if (isUnified) norm else project(norm)
+                if (!isFiniteNonZero(projected)) {
+                    repEmbeddings[slot] = null
+                    repExprSummaries[slot] = ""
+                    failedCount++
+                    continue
+                }
+                val exprSum = decoder?.decodeCaption(res.exprLogits) ?: ""
+                repEmbeddings[slot] = projected
+                repExprSummaries[slot] = exprSum
+                if (cache.size < maxCacheSize) {
+                    cache.add(CachedThumbEmb(repThumbs[slot], projected, exprSum))
+                }
+            }
+            return failedCount
         }
 
         private fun l2Normalize(v: FloatArray): FloatArray {
