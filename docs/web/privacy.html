@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>隐私政策 — MomoTranScript</title>
+  <style>
+    :root { --bg: #f8f9fc; --card: #fff; --text: #1e293b; --muted: #64748b; --accent: #e0537a; --border: #e2e8f0; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.8;
+    }
+    .wrap { max-width: 780px; margin: 0 auto; padding: 32px 20px 56px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 28px 26px; }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    .meta { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+    h2 { font-size: 16px; margin: 22px 0 8px; padding-left: 10px; border-left: 3px solid var(--accent); }
+    p, li { font-size: 14px; color: #334155; }
+    ul { padding-left: 20px; margin: 6px 0; }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+    th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
+    th { background: #f1f5f9; }
+    .nav { margin-bottom: 14px; font-size: 14px; }
+    .nav a { color: var(--accent); text-decoration: none; }
+    footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 24px; }
+    footer a { color: var(--muted); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav"><a href="./index.html">← 返回 MomoTranScript 主页</a></div>
+    <article class="card">
+      <h1>MomoTranScript 隐私政策</h1>
+      <div class="meta">更新日期：2026 年 11 月 26 日 · 生效日期：2026 年 11 月 26 日 · 适用应用包名：dev.momotranscript.app</div>
+
+      <p>
+        MomoTranScript（以下简称“本应用”）由个人开发者（联系邮箱：<a href="mailto:momotranscript@xiyihan.cn">momotranscript@xiyihan.cn</a>）开发并运营。我们高度重视您的个人信息与隐私安全，本政策将清晰说明本应用对您数据的处理方式。
+      </p>
+
+      <h2>一、核心原则：纯端侧本地处理，不收集个人信息</h2>
+      <ul>
+        <li><strong>无需注册登录：</strong>本应用不设账号体系，不收集您的姓名、手机号、身份证号、邮箱、位置信息或任何设备硬件标识符（IMEI / OAID / MAC 地址 / Android ID）。</li>
+        <li><strong>图片与文档绝不上传：</strong>您通过系统选择器或系统分享导入的图片、文件夹及 PDF 文档，其全部版面定位、OCR 文字识别与结果生成均在您的手机本地完成，绝不上传至开发者或任何第三方服务器。</li>
+        <li><strong>无第三方广告、统计或推送 SDK：</strong>本应用未集成任何商业统计分析、广告归因、消息推送或社交分享第三方 SDK。</li>
+      </ul>
+
+      <h2>二、本应用使用的系统权限与场景说明</h2>
+      <table>
+        <thead>
+          <tr><th>权限 / 系统机制</th><th>使用目的与触发时机</th><th>是否可拒绝</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>网络访问（INTERNET）</td>
+            <td>仅在您同意本隐私政策后，且主动点击「下载模型」或「打开合规链接」时，用于从您配置的模型源下载离线识别模型文件。</td>
+            <td>可不联网，支持本地目录离线导入模型</td>
+          </tr>
+          <tr>
+            <td>系统图片/文档选择器（PhotoPicker / SAF）</td>
+            <td>仅在您主动选择图片、目录、PDF 或导出文本/存档时，按单次授权读取或写入您指定的文件，不申请全局存储权限。</td>
+            <td>按需触发，可随时取消</td>
+          </tr>
+          <tr>
+            <td>前台服务与通知（FOREGROUND_SERVICE / POST_NOTIFICATIONS）</td>
+            <td>在批量处理多张长图或大页数 PDF 时，于通知栏显示转录进度并防止系统在息屏时中断本地计算。</td>
+            <td>可拒绝通知权限，不影响基本转录功能</td>
+          </tr>
+          <tr>
+            <td>剪贴板写入</td>
+            <td>仅在您主动点击「复制」或「复制日志」按钮时写入剪贴板，绝不静默读取剪贴板内容。</td>
+            <td>仅由用户主动点击触发</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>三、本地数据存储与清理</h2>
+      <p>
+        本应用下载的模型文件、GPU Shader 缓存、任务临时产物与设置偏好均仅保存在本应用的系统沙盒私有目录内（并已关闭系统云端自动备份 <code>allowBackup="false"</code>）。您随时可以通过以下方式彻底删除全部本地数据：
+      </p>
+      <ul>
+        <li>在应用内「模型」页点击删除单个模型包；</li>
+        <li>在手机「系统设置 → 应用管理 → MomoTranScript → 存储」中点击清除数据；</li>
+        <li>直接卸载本应用，系统将自动清除全部私有目录数据。</li>
+      </ul>
+
+      <h2>四、第三方模型源与外部链接</h2>
+      <p>
+        本应用默认提供公开可访问的模型文件下载地址，并允许您在「模型」页自定义模型仓库地址或完全通过本地文件夹导入。当您主动发起模型下载或点击外部网页链接（如隐私政策、备案查询页）时，相应网络请求将遵循目标托管服务方的隐私规则。
+      </p>
+
+      <h2>五、未成年人保护</h2>
+      <p>
+        本应用不收集任何个人身份信息。若您为未满 14 周岁的未成年人，请在监护人的陪同与同意下阅读本政策并使用本应用。
+      </p>
+
+      <h2>六、政策更新与联系我们</h2>
+      <p>
+        如本隐私政策发生重大变更，我们将在本页面更新并标明最新生效日期，并在应用内适当提示。如您对本政策有任何疑问、意见或隐私相关投诉建议，请发送邮件至：
+        <a href="mailto:momotranscript@xiyihan.cn">momotranscript@xiyihan.cn</a>，我们将在收到后 15 个工作日内予以回复。
+      </p>
+    </article>
+
+    <footer>
+      <a href="./terms.html">《用户协议》</a> ·
+      <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">湘ICP备2023031823号-1</a>
+    </footer>
+  </div>
+</body>
+</html>

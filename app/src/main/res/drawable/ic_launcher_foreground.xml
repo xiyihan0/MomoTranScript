@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Soft drop shadow behind viewfinder brackets -->
+    <group android:translateY="0.9">
+        <path
+            android:pathData="M29,37.5 L29,34 Q29,29 34,29 L37.5,29"
+            android:strokeColor="#22A82A4F"
+            android:strokeWidth="2.6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M70.5,29 L74,29 Q79,29 79,34 L79,37.5"
+            android:strokeColor="#22A82A4F"
+            android:strokeWidth="2.6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M29,70.5 L29,74 Q29,79 34,79 L37.5,79"
+            android:strokeColor="#22A82A4F"
+            android:strokeWidth="2.6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M70.5,79 L74,79 Q79,79 79,74 L79,70.5"
+            android:strokeColor="#22A82A4F"
+            android:strokeWidth="2.6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+
+    <!-- Four minimalist sky-tinted scanner viewfinder corner brackets -->
+    <path
+        android:pathData="M29,37.5 L29,34 Q29,29 34,29 L37.5,29"
+        android:strokeColor="#E4F5FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M70.5,29 L74,29 Q79,29 79,34 L79,37.5"
+        android:strokeColor="#E4F5FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M29,70.5 L29,74 Q29,79 34,79 L37.5,79"
+        android:strokeColor="#E4F5FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M70.5,79 L74,79 Q79,79 79,74 L79,70.5"
+        android:strokeColor="#E4F5FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Elevated shadow under chat bubble -->
+    <group
+        android:translateX="0.6"
+        android:translateY="2.0">
+        <path
+            android:fillColor="#26A6234B"
+            android:pathData="M40,35 L68,35 Q74,35 74,41 L74,59 Q74,65 68,65 L49.5,65 L43.2,71.6 Q40.2,74.2 40.2,70.4 L40.2,65 L40,65 Q34,65 34,59 L34,41 Q34,35 40,35 Z" />
+    </group>
+
+    <!-- Pure-white MomoTalk-inspired rounded chat bubble -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,35 L68,35 Q74,35 74,41 L74,59 Q74,65 68,65 L49.5,65 L43.2,71.6 Q40.2,74.2 40.2,70.4 L40.2,65 L40,65 Q34,65 34,59 L34,41 Q34,35 40,35 Z" />
+
+    <!-- MomoScript prompt chevron '>' -->
+    <path
+        android:pathData="M41.4,41.3 L45.7,45.2 L41.4,49.1"
+        android:strokeColor="#F45D84"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- First structured script line (deep slate-navy) -->
+    <path
+        android:fillColor="#23374F"
+        android:pathData="M51.8,43.0 L65.4,43.0 Q67.6,43.0 67.6,45.2 Q67.6,47.4 65.4,47.4 L51.8,47.4 Q49.6,47.4 49.6,45.2 Q49.6,43.0 51.8,43.0 Z" />
+
+    <!-- Second script continuation line (Schale sky-blue) -->
+    <path
+        android:fillColor="#36B5F7"
+        android:pathData="M42.7,53.6 L56.8,53.6 Q59.0,53.6 59.0,55.8 Q59.0,58.0 56.8,58.0 L42.7,58.0 Q40.5,58.0 40.5,55.8 Q40.5,53.6 42.7,53.6 Z" />
+</vector>

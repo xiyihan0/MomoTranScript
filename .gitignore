@@ -1,0 +1,46 @@
+# Gradle / Android build outputs
+.gradle/
+.kotlin/
+build/
+app/build/
+build-host/
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# Native / CMake / NDK & downloaded MNN prebuilt archives
+.cxx/
+obj/
+*.o
+*.a
+*.so
+app/src/main/cpp/third_party/mnn/mnn_*_android_*/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Model weights & large binary packs (never commit to Git)
+*.onnx
+*.mnn
+*.plan
+*.engine
+*.pdparams
+*.npz
+*.pack
+*.avifs
+*.zst
+assets/models/
+assets/avatar/
+
+# Secrets & signing keystores
+*.jks
+*.keystore
+.env
+.env.*
+secrets.properties

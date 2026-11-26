@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Full-bleed MomoTalk sakura-to-coral gradient background -->
+    <path android:pathData="M0,0 L108,0 L108,108 L0,108 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="6"
+                android:startY="4"
+                android:endX="102"
+                android:endY="104">
+                <item android:offset="0.0" android:color="#FFB1C6" />
+                <item android:offset="0.48" android:color="#FF82A4" />
+                <item android:offset="1.0" android:color="#F15B84" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Subtle luminous top-left glow -->
+    <path android:pathData="M0,0 L108,0 L108,108 L0,108 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="24"
+                android:centerY="20"
+                android:gradientRadius="68">
+                <item android:offset="0.0" android:color="#38FFFFFF" />
+                <item android:offset="1.0" android:color="#00FFFFFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>
