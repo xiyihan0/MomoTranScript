@@ -208,19 +208,40 @@ void center_square_inplace(std::vector<uint8_t>& crop, int& w, int& h, bool circ
     h = side;
 }
 
-float compute_rgb_std(const std::vector<uint8_t>& rgb) {
-    if (rgb.empty()) return 0.0f;
-    double sum = 0.0;
-    double sum_sq = 0.0;
-    for (uint8_t v : rgb) {
-        double d = static_cast<double>(v);
-        sum += d;
-        sum_sq += d * d;
+float compute_rgb_spatial_std(const std::vector<uint8_t>& rgb, int w, int h, bool inner_circle_only) {
+    if (rgb.empty() || w <= 0 || h <= 0) return 0.0f;
+    double sum[3] = {0.0, 0.0, 0.0};
+    double sum_sq[3] = {0.0, 0.0, 0.0};
+    size_t count = 0;
+    const float cx = static_cast<float>(w - 1) * 0.5f;
+    const float cy = static_cast<float>(h - 1) * 0.5f;
+    const float r = static_cast<float>(std::min(w, h)) * 0.40f;
+    const float r2 = r * r;
+    for (int y = 0; y < h; ++y) {
+        const float dy = static_cast<float>(y) - cy;
+        const uint8_t* row = rgb.data() + static_cast<size_t>(y) * w * 3;
+        for (int x = 0; x < w; ++x) {
+            if (inner_circle_only) {
+                const float dx = static_cast<float>(x) - cx;
+                if (dx * dx + dy * dy > r2) continue;
+            }
+            for (int c = 0; c < 3; ++c) {
+                double d = static_cast<double>(row[x * 3 + c]);
+                sum[c] += d;
+                sum_sq[c] += d * d;
+            }
+            ++count;
+        }
     }
-    double n = static_cast<double>(rgb.size());
-    double mean = sum / n;
-    double var = std::max(0.0, sum_sq / n - mean * mean);
-    return static_cast<float>(std::sqrt(var));
+    if (count == 0) return 0.0f;
+    const double n = static_cast<double>(count);
+    double max_std = 0.0;
+    for (int c = 0; c < 3; ++c) {
+        double mean = sum[c] / n;
+        double var = std::max(0.0, sum_sq[c] / n - mean * mean);
+        max_std = std::max(max_std, std::sqrt(var));
+    }
+    return static_cast<float>(max_std);
 }
 
 void resize_rgb_float(
@@ -333,7 +354,7 @@ void prepare_ccip_input_nchw(
     }
     center_square_inplace(crop, cw, ch, circle_mask);
     if (out_std != nullptr) {
-        *out_std = compute_rgb_std(crop);
+        *out_std = compute_rgb_spatial_std(crop, cw, ch, circle_mask);
     }
 
     const size_t plane = static_cast<size_t>(dst_size) * static_cast<size_t>(dst_size);

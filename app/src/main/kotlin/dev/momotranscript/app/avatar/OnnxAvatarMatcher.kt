@@ -234,6 +234,7 @@ class OnnxAvatarMatcher(
         val missSlots = ArrayList<Int>()
         var cacheHits = 0
         for (slot in repIndices.indices) {
+            if (repPrepared[slot].std < 8.0f) continue
             val hit = lookupThumbCache(avatarEmbCache, repThumbs[slot], 5.5f, shiftTolerant = true)
             if (hit != null) {
                 repEmbeddings[slot] = hit.emb

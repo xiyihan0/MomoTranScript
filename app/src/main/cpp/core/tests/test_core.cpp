@@ -378,6 +378,99 @@ void test_cv_lines_bubble_tail_and_rounded_corners() {
     std::cout << "[PASS] test_cv_lines_bubble_tail_and_rounded_corners\n";
 }
 
+void test_solid_color_avatar_std_guard() {
+    const int S = 64;
+    std::vector<float> nchw(3 * 32 * 32, 0.0f);
+
+    auto make_circle_on_white = [&](uint8_t r, uint8_t g, uint8_t b) {
+        std::vector<uint8_t> rgb(static_cast<size_t>(S) * S * 3, 255);
+        const float c = static_cast<float>(S - 1) * 0.5f;
+        const float rad2 = (S * 0.45f) * (S * 0.45f);
+        for (int y = 0; y < S; ++y) {
+            for (int x = 0; x < S; ++x) {
+                float dx = x - c, dy = y - c;
+                if (dx * dx + dy * dy <= rad2) {
+                    size_t off = (static_cast<size_t>(y) * S + x) * 3;
+                    rgb[off + 0] = r; rgb[off + 1] = g; rgb[off + 2] = b;
+                }
+            }
+        }
+        return rgb;
+    };
+
+    // Pure black, pure white, pure dark gray, and pure blue circles on white chat background
+    // MUST all report inner spatial std < 8.0 so solid-color avatars are never mis-matched!
+    for (auto [r, g, b] : std::vector<std::tuple<uint8_t, uint8_t, uint8_t>>{
+             {0, 0, 0}, {255, 255, 255}, {28, 30, 34}, {40, 120, 210}, {245, 150, 180}}) {
+        auto img = make_circle_on_white(r, g, b);
+        float std_val = 999.0f, aspect = 0.0f;
+        mmt::prepare_ccip_input_nchw(
+            img.data(), S, S, mmt::BoxI{0, 0, S, S},
+            true, false, 32, nchw.data(), &std_val, &aspect, true);
+        assert(std_val < 1.0f);
+    }
+
+    // Real patterned avatar (e.g. left dark hair + right bright face inside circle) must stay well above 8.0
+    auto patterned = make_circle_on_white(230, 210, 200);
+    for (int y = 0; y < S; ++y) {
+        for (int x = 0; x < S / 2; ++x) {
+            size_t off = (static_cast<size_t>(y) * S + x) * 3;
+            patterned[off + 0] = 35; patterned[off + 1] = 45; patterned[off + 2] = 65;
+        }
+    }
+    float pat_std = 0.0f, pat_aspect = 0.0f;
+    mmt::prepare_ccip_input_nchw(
+        patterned.data(), S, S, mmt::BoxI{0, 0, S, S},
+        true, false, 32, nchw.data(), &pat_std, &pat_aspect, true);
+    assert(pat_std > 40.0f);
+    std::cout << "[PASS] test_solid_color_avatar_std_guard\n";
+}
+
+void test_wide_strip_pad_to_square() {
+    // 1. Wide strip 400x100 with cream canvas (250, 244, 235) and a blue bubble in the middle
+    const int W = 400, H = 100, DST = 64;
+    std::vector<uint8_t> rgb(static_cast<size_t>(W) * H * 3);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            size_t off = (static_cast<size_t>(y) * W + x) * 3;
+            bool in_bubble = (x >= 100 && x < 300 && y >= 20 && y < 80);
+            rgb[off + 0] = in_bubble ? 60 : 250;
+            rgb[off + 1] = in_bubble ? 130 : 244;
+            rgb[off + 2] = in_bubble ? 210 : 235;
+        }
+    }
+    std::vector<float> nchw(static_cast<size_t>(3) * DST * DST, 0.0f);
+    mmt::prepare_det_input_nchw(rgb.data(), W, H, mmt::Window{0, 0, W, H}, DST, nchw.data());
+    const size_t plane = static_cast<size_t>(DST) * DST;
+    // Center of bubble sits at y=50/400=0.125 -> dy=8, dx=32 -> must be blue (60, 130, 210)
+    assert(std::fabs(nchw[0 * plane + 8 * DST + 32] - 60.0f / 255.0f) < 0.02f);
+    assert(std::fabs(nchw[2 * plane + 8 * DST + 32] - 210.0f / 255.0f) < 0.02f);
+    // Bottom padded region (dy=48, dx=32) must match cream border median (250, 244, 235)
+    assert(std::fabs(nchw[0 * plane + 48 * DST + 32] - 250.0f / 255.0f) < 0.01f);
+    assert(std::fabs(nchw[1 * plane + 48 * DST + 32] - 244.0f / 255.0f) < 0.01f);
+    assert(std::fabs(nchw[2 * plane + 48 * DST + 32] - 235.0f / 255.0f) < 0.01f);
+
+    // 2. Decode on 400x100 window:
+    //    query 0 inside real strip: cx=0.5, cy=0.125, bw=0.5, bh=0.10 -> x=[100,300], y=[30,70]
+    //    query 1 wholly in bottom pad: cx=0.5, cy=0.60, bw=0.4, bh=0.20 -> y=[200,280] >= 100 (dropped!)
+    const int Q = 4;
+    std::vector<float> bboxes(Q * 4, 0.0f);
+    std::vector<float> logits(Q * mmt::kNumClasses, -10.0f);
+    bboxes[0 * 4 + 0] = 0.5f; bboxes[0 * 4 + 1] = 0.125f; bboxes[0 * 4 + 2] = 0.5f; bboxes[0 * 4 + 3] = 0.10f;
+    logits[0 * mmt::kNumClasses + 3] = 4.0f;  // bubble_right
+    bboxes[1 * 4 + 0] = 0.5f; bboxes[1 * 4 + 1] = 0.60f; bboxes[1 * 4 + 2] = 0.4f; bboxes[1 * 4 + 3] = 0.20f;
+    logits[1 * mmt::kNumClasses + 5] = 4.0f;  // insert_image in pad -> must be dropped
+
+    auto mapped = mmt::decode_window_candidates(bboxes.data(), logits.data(), Q, mmt::Window{0, 0, W, H}, 0, W, H);
+    assert(mapped.size() == 1);
+    assert(mapped[0].class_id == 3);
+    assert(std::fabs(mapped[0].box.x0 - 100.0f) < 1e-3f);
+    assert(std::fabs(mapped[0].box.y0 - 30.0f) < 1e-3f);
+    assert(std::fabs(mapped[0].box.x1 - 300.0f) < 1e-3f);
+    assert(std::fabs(mapped[0].box.y1 - 70.0f) < 1e-3f);
+    std::cout << "[PASS] test_wide_strip_pad_to_square\n";
+}
+
 }  // namespace
 
 int main() {
@@ -389,5 +482,7 @@ int main() {
     test_visual_match_ccip_and_stage2();
     test_speaker_across_insert_image();
     test_cv_lines_bubble_tail_and_rounded_corners();
+    test_solid_color_avatar_std_guard();
+    test_wide_strip_pad_to_square();
     return 0;
 }

@@ -69,6 +69,8 @@ std::vector<MappedCandidate> decode_window_candidates(
 
     const float cw = static_cast<float>(window.width());
     const float ch = static_cast<float>(window.height());
+    const float eff_h = std::max(ch, cw);
+    const bool is_padded = eff_h > ch;
 
     std::vector<uint8_t> seen_q(static_cast<size_t>(num_queries), 0);
     std::vector<BoxF> active_tr;
@@ -85,11 +87,12 @@ std::vector<MappedCandidate> decode_window_candidates(
         const float cx = bb[0], cy = bb[1], bw = bb[2], bh = bb[3];
         const BoxF local{
             (cx - 0.5f * bw) * cw,
-            (cy - 0.5f * bh) * ch,
+            (cy - 0.5f * bh) * eff_h,
             (cx + 0.5f * bw) * cw,
-            (cy + 0.5f * bh) * ch,
+            (cy + 0.5f * bh) * eff_h,
         };
         if (local.x1 <= local.x0 || local.y1 <= local.y0) continue;
+        if (is_padded && local.y0 >= ch) continue;
         if (seen_q[static_cast<size_t>(r.q)]) continue;
         seen_q[static_cast<size_t>(r.q)] = 1;
 

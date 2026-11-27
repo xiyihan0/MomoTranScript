@@ -307,7 +307,12 @@ object BatchTranscriptionPipeline {
                     return vm.character to head
                 }
             }
-            val key = if (vm.customClusterId.isNotBlank()) "cluster:${vm.customClusterId}" else "sp:$fallbackName"
+            val isSpecialCluster = vm.customClusterId == "blank_avatar" || vm.customClusterId == "encode_failed"
+            val key = if (vm.customClusterId.isNotBlank() && !isSpecialCluster) {
+                "cluster:${vm.customClusterId}"
+            } else {
+                "sp:$fallbackName"
+            }
             return ensureCustomChar(key, fallbackName, rgb, imgW, imgH, vm.subBox)
         }
 

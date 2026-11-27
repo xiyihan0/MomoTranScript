@@ -72,20 +72,71 @@ void prepare_det_input_nchw(
     const int stride_bytes = img_w * 3;
     const size_t plane = static_cast<size_t>(dst_size) * static_cast<size_t>(dst_size);
 
+    const bool pad_bottom = ch < cw;
+    const int eff_h = pad_bottom ? cw : ch;
+    std::array<float, 3> bg_norm{1.0f, 1.0f, 1.0f};
+    if (pad_bottom) {
+        std::array<std::array<int, 256>, 3> hist{};
+        int total_px = 0;
+        const int b_rows = std::min(2, ch);
+        const int b_cols = std::min(2, cw);
+        auto add_px = [&](const uint8_t* px) {
+            hist[0][px[0]]++;
+            hist[1][px[1]]++;
+            hist[2][px[2]]++;
+            total_px++;
+        };
+        for (int y = ch - b_rows; y < ch; ++y) {
+            const uint8_t* row = crop_ptr + static_cast<size_t>(y) * stride_bytes;
+            for (int x = 0; x < cw; ++x) add_px(row + x * 3);
+        }
+        for (int y = 0; y < ch; ++y) {
+            const uint8_t* row = crop_ptr + static_cast<size_t>(y) * stride_bytes;
+            for (int x = 0; x < b_cols; ++x) add_px(row + x * 3);
+            for (int x = cw - b_cols; x < cw; ++x) add_px(row + x * 3);
+        }
+        const int half = total_px / 2;
+        for (int c = 0; c < 3; ++c) {
+            int acc = 0;
+            uint8_t med = 255;
+            for (int v = 0; v < 256; ++v) {
+                acc += hist[c][v];
+                if (acc > half) {
+                    med = static_cast<uint8_t>(v);
+                    break;
+                }
+            }
+            bg_norm[c] = static_cast<float>(med) * (1.0f / 255.0f);
+        }
+    }
+
     const float scale_x = static_cast<float>(cw) / static_cast<float>(dst_size);
-    const float scale_y = static_cast<float>(ch) / static_cast<float>(dst_size);
+    const float scale_y = static_cast<float>(eff_h) / static_cast<float>(dst_size);
+    const float last_row_y = static_cast<float>(ch - 1);
+    const float ch_f = static_cast<float>(ch);
 
     for (int dy = 0; dy < dst_size; ++dy) {
         const float sy = (static_cast<float>(dy) + 0.5f) * scale_y - 0.5f;
         const size_t row_off = static_cast<size_t>(dy) * dst_size;
+        if (pad_bottom && sy >= ch_f) {
+            for (int dx = 0; dx < dst_size; ++dx) {
+                out_nchw[0 * plane + row_off + dx] = bg_norm[0];
+                out_nchw[1 * plane + row_off + dx] = bg_norm[1];
+                out_nchw[2 * plane + row_off + dx] = bg_norm[2];
+            }
+            continue;
+        }
+        const bool blend_pad = pad_bottom && sy > last_row_y;
+        const float pad_w = blend_pad ? (sy - last_row_y) : 0.0f;
         for (int dx = 0; dx < dst_size; ++dx) {
             const float sx = (static_cast<float>(dx) + 0.5f) * scale_x - 0.5f;
-            out_nchw[0 * plane + row_off + dx] =
-                bilinear_sample(crop_ptr, cw, ch, stride_bytes, sx, sy, 0) * (1.0f / 255.0f);
-            out_nchw[1 * plane + row_off + dx] =
-                bilinear_sample(crop_ptr, cw, ch, stride_bytes, sx, sy, 1) * (1.0f / 255.0f);
-            out_nchw[2 * plane + row_off + dx] =
-                bilinear_sample(crop_ptr, cw, ch, stride_bytes, sx, sy, 2) * (1.0f / 255.0f);
+            for (int c = 0; c < 3; ++c) {
+                float val = bilinear_sample(crop_ptr, cw, ch, stride_bytes, sx, sy, c) * (1.0f / 255.0f);
+                if (blend_pad) {
+                    val = val * (1.0f - pad_w) + bg_norm[c] * pad_w;
+                }
+                out_nchw[static_cast<size_t>(c) * plane + row_off + dx] = val;
+            }
         }
     }
 }
